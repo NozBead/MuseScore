@@ -21,6 +21,7 @@
 #include "libmscore/utils.h"
 #include "libmscore/score.h"
 #include "libmscore/spanner.h"
+#include "thirdparty/ofqf/qoscclient.h"
 
 namespace Ms {
 
@@ -258,6 +259,8 @@ class PluginAPI : public Ms::QmlPlugin {
       Q_INVOKABLE void closeLog();
 
       Q_INVOKABLE Ms::PluginAPI::FractionWrapper* fraction(int numerator, int denominator) const;
+
+      Q_INVOKABLE QOscClient* createOscClient(const QString& host, int port);
       };
 
 #undef DECLARE_API_ENUM

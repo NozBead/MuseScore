@@ -275,6 +275,15 @@ FractionWrapper* PluginAPI::fraction(int num, int den) const
       }
 
 //---------------------------------------------------------
+//   PluginAPI::createOscClient
+//---------------------------------------------------------
+
+QOscClient* PluginAPI::createOscClient(const QString& host, int port)
+      {
+      return new QOscClient(QHostAddress(host), port, qApp);
+      }
+
+//---------------------------------------------------------
 //   PluginAPI::registerQmlTypes
 //---------------------------------------------------------
 
@@ -351,6 +360,8 @@ void PluginAPI::registerQmlTypes()
 #endif
       qmlRegisterType<FractionWrapper>();
       qRegisterMetaType<FractionWrapper*>("FractionWrapper*");
+
+      qmlRegisterType<QOscClient>();
 
       qmlTypesRegistered = true;
       }
