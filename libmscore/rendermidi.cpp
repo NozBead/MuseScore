@@ -52,6 +52,7 @@
 #include "utils.h"
 #include "sym.h"
 #include "synthesizerstate.h"
+#include "log.h"
 
 #include "audio/midi/event.h"
 #include "mscore/preferences.h"
@@ -537,7 +538,8 @@ static void renderHarmony(EventMap* events, Measure* m, Harmony* h, int tickOffs
             return;
       Staff* staff = m->score()->staff(h->track() / VOICES);
       const Channel* channel = staff->part()->harmonyChannel();
-      Q_ASSERT(channel);
+      IF_ASSERT_FAILED(channel)
+            return;
 
       events->registerChannel(channel->channel());
       if (!staff->primaryStaff())
@@ -589,10 +591,14 @@ void MidiRenderer::collectMeasureEventsSimple(EventMap* events, Measure* m, cons
             //render harmony
             if (sctx.renderHarmony) {
                   for (Element* e : seg->annotations()) {
-                        if (!e->isHarmony() || (e->track() < strack) || (e->track() >= etrack))
+                        if (!e || (e->track() < strack) || (e->track() >= etrack))
                               continue;
-                        Harmony* h = toHarmony(e);
-                        if (!h->play())
+                        Harmony* h = nullptr;
+                        if (e->isHarmony())
+                              h = toHarmony(e);
+                        else if (e->isFretDiagram())
+                              h = toFretDiagram(e)->harmony();
+                        if (!h || !h->play())
                               continue;
                         renderHarmony(events, m, h, tickOffset);
                         }
@@ -670,10 +676,14 @@ void MidiRenderer::collectMeasureEventsDefault(EventMap* events, Measure* m, con
             //render harmony
             if (sctx.renderHarmony) {
                   for (Element* e : seg->annotations()) {
-                        if (!e->isHarmony() || (e->track() < strack) || (e->track() >= etrack))
+                        if (!e || (e->track() < strack) || (e->track() >= etrack))
                               continue;
-                        Harmony* h = toHarmony(e);
-                        if (!h->play())
+                        Harmony* h = nullptr;
+                        if (e->isHarmony())
+                              h = toHarmony(e);
+                        else if (e->isFretDiagram())
+                              h = toFretDiagram(e)->harmony();
+                        if (!h || !h->play())
                               continue;
                         renderHarmony(events, m, h, tickOffset);
                         }
@@ -2152,7 +2162,7 @@ void Score::renderMidi(EventMap* events, bool metronome, bool expandRepeats, con
       masterScore()->setExpandRepeats(expandRepeats);
       MidiRenderer::Context ctx(synthState);
       ctx.metronome = metronome;
-      ctx.renderHarmony = preferences.getBool(PREF_SCORE_HARMONY_PLAY);
+      ctx.renderHarmony = true;
       MidiRenderer(this).renderScore(events, ctx);
       }
 

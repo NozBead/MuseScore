@@ -257,6 +257,8 @@ EditStyle::EditStyle(Score* s, QWidget* parent)
       { Sid::harmonyFretDist,         false, harmonyFretDist,         0 },
       { Sid::minHarmonyDistance,      false, minHarmonyDistance,      0 },
       { Sid::maxHarmonyBarDistance,   false, maxHarmonyBarDistance,   0 },
+      { Sid::maxChordShiftAbove,      false, maxChordShiftAbove,      resetMaxChordShiftAbove   },
+      { Sid::maxChordShiftBelow,      false, maxChordShiftBelow,      resetMaxChordShiftBelow   },
 
       { Sid::tupletVHeadDistance,     false, tupletVHeadDistance,     resetTupletVHeadDistance      },
       { Sid::tupletVStemDistance,     false, tupletVStemDistance,     resetTupletVStemDistance      },
@@ -285,6 +287,8 @@ EditStyle::EditStyle(Score* s, QWidget* parent)
       { Sid::measureNumberAllStaves,   false, showAllStavesMeasureNumber,   0 },
       { Sid::measureNumberVPlacement,  false, measureNumberVPlacement,      resetMeasureNumberVPlacement },
       { Sid::measureNumberHPlacement,  false, measureNumberHPlacement,      resetMeasureNumberHPlacement },
+      { Sid::measureNumberPosAbove,    false, measureNumberPosAbove,        resetMeasureNumberPosAbove },
+      { Sid::measureNumberPosBelow,    false, measureNumberPosBelow,        resetMeasureNumberPosBelow },
 
       { Sid::beamDistance,             true,  beamDistance,                 0 },
       { Sid::beamNoSlope,              false, beamNoSlope,                  0 },
@@ -332,6 +336,8 @@ EditStyle::EditStyle(Score* s, QWidget* parent)
       { Sid::fretDotSize,              false, fretDotSize,                  0 },
       { Sid::fretStringSpacing,        false, fretStringSpacing,            0 },
       { Sid::fretFretSpacing,          false, fretFretSpacing,              0 },
+      { Sid::maxFretShiftAbove,        false, maxFretShiftAbove,            resetMaxFretShiftAbove   },
+      { Sid::maxFretShiftBelow,        false, maxFretShiftBelow,            resetMaxFretShiftBelow   },
       { Sid::scaleBarlines,            false, scaleBarlines,                resetScaleBarlines},
       { Sid::crossMeasureValues,       false, crossMeasureValues,           0 },
 

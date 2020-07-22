@@ -620,13 +620,9 @@ void Score::transposeSemitone(int step)
 
       const int interval = intervalListArray[keyType][step > 0 ? 0 : 1];
 
-      cmdSelectAll();
       if (!transpose(TransposeMode::BY_INTERVAL, dir, Key::C, interval, true, true, false)) {
             qDebug("Score::transposeSemitone: failed");
             // TODO: set error message
-            }
-      else {
-            deselectAll();
             }
       }
 
@@ -695,6 +691,18 @@ void Note::transposeDiatonic(int interval, bool keepAlterations, bool useDoubleA
 
       // store new data
       score()->undoChangePitch(this, newPitch, newTpc1, newTpc2);
+      }
+
+//---------------------------------------------------------
+//   transposeDiatonicAlterations
+//---------------------------------------------------------
+
+void Score::transposeDiatonicAlterations(TransposeDirection direction)
+      {
+      // Transpose current selection diatonically (up/down) while keeping degree alterations
+      // Note: Score::transpose() absolutely requires valid selection before invocation.
+      if (!selection().isNone())
+            transpose(TransposeMode::DIATONICALLY, direction, Key::C, 1, true, true, true);
       }
 
 //---------------------------------------------------------

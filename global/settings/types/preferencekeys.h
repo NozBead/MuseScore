@@ -24,6 +24,7 @@
 // Defines for all preferences
 // Every preference should have a define to ease the usage of the preference
 // Make sure the string key has a sensible grouping - use / for grouping
+// If the preference has to do with the UI/STYLE/THEME, add it under ui (so that the view is updated when apply is pressed)
 //
 #define PREF_APP_AUTOSAVE_AUTOSAVETIME                      "application/autosave/autosaveTime"
 #define PREF_APP_AUTOSAVE_USEAUTOSAVE                       "application/autosave/useAutosave"
@@ -42,6 +43,7 @@
 #define PREF_APP_PLAYBACK_FOLLOWSONG                        "application/playback/followSong"
 #define PREF_APP_PLAYBACK_PANPLAYBACK                       "application/playback/panPlayback"
 #define PREF_APP_PLAYBACK_PLAYREPEATS                       "application/playback/playRepeats"
+#define PREF_APP_PLAYBACK_SPEEDINCREMENT                    "application/playback/speedIncrement"
 #define PREF_APP_PLAYBACK_LOOPTOSELECTIONONPLAY             "application/playback/setLoopToSelectionOnPlay"
 #define PREF_APP_USESINGLEPALETTE                           "application/useSinglePalette"
 #define PREF_APP_PALETTESCALE                               "application/paletteScale"
@@ -101,9 +103,7 @@
 #define PREF_IO_PORTMIDI_OUTPUTLATENCYMILLISECONDS          "io/portMidi/outputLatencyMilliseconds"
 #define PREF_IO_PULSEAUDIO_USEPULSEAUDIO                    "io/pulseAudio/usePulseAudio"
 #define PREF_SCORE_CHORD_PLAYONADDNOTE                      "score/chord/playOnAddNote"
-#define PREF_SCORE_HARMONY_PLAY                             "score/harmony/play"
 #define PREF_SCORE_HARMONY_PLAY_ONEDIT                      "score/harmony/play/onedit"
-#define PREF_SCORE_MAGNIFICATION                            "score/magnification"
 #define PREF_SCORE_NOTE_PLAYONCLICK                         "score/note/playOnClick"
 #define PREF_SCORE_NOTE_DEFAULTPLAYDURATION                 "score/note/defaultPlayDuration"
 #define PREF_SCORE_NOTE_WARNPITCHRANGE                      "score/note/warnPitchRange"
@@ -116,6 +116,10 @@
 #define PREF_UI_CANVAS_FG_COLOR                             "ui/canvas/foreground/color"
 #define PREF_UI_CANVAS_BG_WALLPAPER                         "ui/canvas/background/wallpaper"
 #define PREF_UI_CANVAS_FG_WALLPAPER                         "ui/canvas/foreground/wallpaper"
+#define PREF_UI_CANVAS_ZOOM_DEFAULT_TYPE                    "ui/canvas/zoomDefaultType"
+#define PREF_UI_CANVAS_ZOOM_DEFAULT_LEVEL                   "ui/canvas/zoomDefaultLevel"
+#define PREF_UI_CANVAS_ZOOM_PRECISION_KEYBOARD              "ui/canvas/zoomPrecisionKeyboard"
+#define PREF_UI_CANVAS_ZOOM_PRECISION_MOUSE                 "ui/canvas/zoomPrecisionMouse"
 #define PREF_UI_CANVAS_MISC_ANTIALIASEDDRAWING              "ui/canvas/misc/antialiasedDrawing"
 #define PREF_UI_CANVAS_MISC_SELECTIONPROXIMITY              "ui/canvas/misc/selectionProximity"
 #define PREF_UI_CANVAS_SCROLL_VERTICALORIENTATION           "ui/canvas/scroll/verticalOrientation"
@@ -187,6 +191,8 @@
 #define PREF_PAN_MODIFIER_MAX                               "smoothPan/modifier/maxSpeed"
 #define PREF_PAN_CURSOR_POS                                 "smoothPan/cursor/position"
 #define PREF_PAN_CURSOR_VISIBLE                             "smoothPan/cursor/visible"
+#define PREF_PAN_TELEPORT_RIGHT                             "smoothPan/cursor/teleportRight"
+#define PREF_PAN_TELEPORT_LEFT                              "smoothPan/cursor/teleportLeft"
 //#define PREF_PAN_DISTANCE_LEFT                              "smoothPan/distance/left"
 //#define PREF_PAN_DISTANCE_LEFT1                             "smoothPan/distance/left1"
 //#define PREF_PAN_DISTANCE_LEFT2                             "smoothPan/distance/left2"

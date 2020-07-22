@@ -1898,19 +1898,27 @@ void MasterScore::addExcerpt(Excerpt* ex)
       {
       Score* score = ex->partScore();
 
+      int nstaves { 1 }; // Initialise to 1 to force writing of the first part.
       for (Staff* s : score->staves()) {
             const LinkedElements* ls = s->links();
             if (ls == 0)
                   continue;
             for (auto le : *ls) {
+                  if (le->score() != this)
+                        continue;
+
+                  // For instruments with multiple staves, every staff will point to the
+                  // same part. To prevent adding the same part several times to the excerpt,
+                  // add only the part of the first staff pointing to the part.
                   Staff* ps = toStaff(le);
-                  if (ps->score() == this) {
+                  if (!(--nstaves)) {
                         ex->parts().append(ps->part());
-                        break;
+                        nstaves = ps->part()->nstaves();
                         }
+                  break;
                   }
             }
-      if (ex->tracks().isEmpty()) {                         // SHOULDN'T HAPPEN, protected in the UI
+      if (ex->tracks().isEmpty()) {      // SHOULDN'T HAPPEN, protected in the UI, but it happens during read-in!!!
             QMultiMap<int, int> tracks;
             for (Staff* s : score->staves()) {
                   const LinkedElements* ls = s->links();
@@ -2694,10 +2702,10 @@ void Score::addAudioTrack()
 //   padToggle
 //---------------------------------------------------------
 
-void Score::padToggle(Pad n, const EditData& ed)
+void Score::padToggle(Pad p, const EditData& ed)
       {
       int oldDots = _is.duration().dots();
-      switch (n) {
+      switch (p) {
             case Pad::NOTE00:
                   _is.setDuration(TDuration::DurationType::V_LONG);
                   break;
@@ -2788,7 +2796,7 @@ void Score::padToggle(Pad n, const EditData& ed)
                         _is.setDots(4);
                   break;
             }
-      if (n >= Pad::NOTE00 && n <= Pad::NOTE1024) {
+      if (p >= Pad::NOTE00 && p <= Pad::NOTE1024) {
             _is.setDots(0);
             //
             // if in "note enter" mode, reset
@@ -2803,21 +2811,59 @@ void Score::padToggle(Pad n, const EditData& ed)
                               case 2:
                                     padToggle(Pad::DOTDOT, ed);
                                     break;
+                              case 3:
+                                    padToggle(Pad::DOT3, ed);
+                                    break;
+                              case 4:
+                                    padToggle(Pad::DOT4, ed);
+                                    break;
                               }
                         NoteVal nval;
+                        Direction stemDirection = Direction::AUTO;
                         if (_is.rest()) {
                               // Enter a rest
                               nval = NoteVal();
                               }
                         else {
-                              // Enter a note on the middle staff line
-                              Staff* s = staff(_is.track() / VOICES);
-                              Fraction tick = _is.tick();
-                              ClefType clef = s->clef(tick);
-                              Key key = s->key(tick);
-                              nval = NoteVal(line2pitch(4, clef, key));
+                              Element* e = selection().element();
+                              if (e && e->isNote()) {
+                                    // use same pitch etc. as previous note
+                                    Note* n = toNote(e);
+                                    nval = n->noteVal();
+                                    stemDirection = n->chord()->stemDirection();
+                                    }
+                              else {
+                                    // enter a reasonable default note
+                                    Staff* s = staff(_is.track() / VOICES);
+                                    Fraction tick = _is.tick();
+                                    if (s->isTabStaff(tick)) {
+                                          // tab - use fret 0 on current string
+                                          nval.fret = 0;
+                                          nval.string = _is.string();
+                                          const Instrument* instr = s->part()->instrument(tick);
+                                          const StringData* stringData = instr->stringData();
+                                          nval.pitch = stringData->getPitch(nval.string, nval.fret, s, tick);
+                                          }
+                                    else if (s->isDrumStaff(tick)) {
+                                          // drum - use selected drum palette note
+                                          int n = _is.drumNote();
+                                          if (n == -1) {
+                                                // no selection on palette - find next valid pitch
+                                                const Drumset* ds = _is.drumset();
+                                                n = ds->nextPitch(n);
+                                                }
+                                          nval = NoteVal(n);
+                                          }
+                                    else {
+                                          // standard staff - use middle line
+                                          ClefType clef = s->clef(tick);
+                                          Key key = s->key(tick);
+                                          int line = ((s->lines(tick) - 1) / 2) * 2;
+                                          nval = NoteVal(line2pitch(line, clef, key));
+                                          }
+                                    }
                               }
-                        setNoteRest(_is.segment(), _is.track(), nval, _is.duration().fraction());
+                        setNoteRest(_is.segment(), _is.track(), nval, _is.duration().fraction(), stemDirection);
                         _is.moveToNextInputPos();
                         }
                   else
@@ -2856,7 +2902,7 @@ void Score::padToggle(Pad n, const EditData& ed)
                   deselect(e);
                   }
             }
-      else if (selection().isNone() && n != Pad::REST) {
+      else if (selection().isNone() && p != Pad::REST) {
             TDuration td = _is.duration();
             ed.view->startNoteEntryMode();
             _is.setDuration(td);
@@ -3133,6 +3179,38 @@ void Score::selectRange(Element* e, int staffIdx)
                   _selection.setStartSegment(cr->segment());
             }
       else {
+            // try to select similar in range
+            Element* selectedElement = _selection.element();
+            if (selectedElement && e->type() == selectedElement->type()) {
+                  int idx1 = selectedElement->staffIdx();
+                  int idx2 = e->staffIdx();
+                  if (idx1 >= 0 && idx2 >= 0) {
+                        Fraction t1 = selectedElement->tick();
+                        Fraction t2 = e->tick();
+                        if (t1 > t2) {
+                              Fraction temp = t1;
+                              t1 = t2;
+                              t2 = temp;
+                              }
+                        Segment* s1 = tick2segmentMM(t1, true, SegmentType::ChordRest);
+                        Segment* s2 = tick2segmentMM(t2, true, SegmentType::ChordRest);
+                        if (s2)
+                              s2 = s2->next1MM(SegmentType::ChordRest);
+                        if (s1 && s2) {
+                              _selection.setRange(s1, s2, idx1, idx2 + 1);
+                              selectSimilarInRange(e);
+                              if (selectedElement->track() == e->track()) {
+                                    // limit to this voice only
+                                    const QList<Element*>& list = _selection.elements();
+                                    for (Element* el : list) {
+                                          if (el->track() != e->track())
+                                                _selection.remove(el);
+                                          }
+                                    }
+                              return;
+                              }
+                        }
+                  }
             select(e, SelectType::SINGLE, staffIdx);
             return;
             }
@@ -3195,6 +3273,12 @@ void Score::collectMatch(void* data, Element* e)
                   return;
             }
 
+      if (p->measure && (p->measure != e->findMeasure()))
+            return;
+
+      if ((p->beat.isValid()) && (p->beat != e->beat()))
+            return;
+
       p->el.append(e);
       }
 
@@ -3228,6 +3312,10 @@ void Score::collectNoteMatch(void* data, Element* e)
       if (p->voice != -1 && p->voice != e->voice())
             return;
       if (p->system && (p->system != n->chord()->segment()->system()))
+            return;
+      if (p->measure && (p->measure != n->findMeasure()))
+            return;
+      if ((p->beat.isValid()) && (p->beat != n->beat()))
             return;
       p->el.append(n);
       }
@@ -3618,27 +3706,8 @@ bool Score::switchLayer(const QString& s)
 //   appendPart
 //---------------------------------------------------------
 
-void Score::appendPart(const QString& name)
+void Score::appendPart(const InstrumentTemplate* t)
       {
-      static InstrumentTemplate defaultInstrument;
-      InstrumentTemplate* t;
-
-      t = searchTemplate(name);
-      if (t == 0) {
-            qDebug("appendPart: <%s> not found", qPrintable(name));
-            t = &defaultInstrument;
-            }
-
-      if (t->channel.empty()) {
-            Channel a;
-            a.setChorus(0);
-            a.setReverb(0);
-            a.setName(Channel::DEFAULT_NAME);
-            a.setBank(0);
-            a.setVolume(90);
-            a.setPan(0);
-            t->channel.append(a);
-            }
       Part* part = new Part(this);
       part->initFromInstrTemplate(t);
       int n = nstaves();
@@ -3853,6 +3922,38 @@ ChordRest* Score::findCRinStaff(const Fraction& tick, int staffIdx) const
       }
 
 //---------------------------------------------------------
+//   cmdNextPrevSystem
+//---------------------------------------------------------
+
+ChordRest* Score::cmdNextPrevSystem(ChordRest* cr, bool next)
+      {
+      auto currentMeasure       = cr->measure();
+      auto currentSystem        = currentMeasure->system();
+      auto destinationMeasure   = currentSystem->firstMeasure();
+      auto firstSegmentOfSystem = destinationMeasure->first();
+
+      // [go to next system]
+      if (next) {
+            if ((destinationMeasure = currentSystem->lastMeasure()->nextMeasure())) {
+                  firstSegmentOfSystem = destinationMeasure->first();
+                  cr = firstSegmentOfSystem->nextChordRest(trackZeroVoice(cr->track()), false);
+                  }
+            else if (currentMeasure != lastMeasure())
+                  cr = lastMeasure()->first()->nextChordRest(trackZeroVoice(cr->track()), false);
+            }
+      // [go to previous system]
+      else {
+            auto currentSegment = cr->segment();
+            auto segmentOfFirstCR = firstSegmentOfSystem->nextChordRest(trackZeroVoice(cr->track()), false)->segment();
+            if (destinationMeasure != firstMeasure() && currentSegment == segmentOfFirstCR)
+                  destinationMeasure = destinationMeasure->prevMeasure()->system()->firstMeasure();
+            if (destinationMeasure)
+                  cr = destinationMeasure->first()->nextChordRest(trackZeroVoice(cr->track()), false);
+            }
+      return cr;
+      }
+
+//---------------------------------------------------------
 //   setSoloMute
 //   called once at opening file, adds soloMute marks
 //---------------------------------------------------------
@@ -3893,6 +3994,45 @@ int Score::nmeasures() const
             n++;
       return n;
       }
+
+//---------------------------------------------------------
+//   firstTrailingMeasure
+//---------------------------------------------------------
+
+Measure* Score::firstTrailingMeasure(ChordRest** cr)
+      {
+      Measure* firstMeasure = nullptr;
+      auto m = lastMeasure();
+
+      // No active selection: prepare first empty trailing measure of entire score
+      if (!cr)
+            for (; m && m->isFullMeasureRest(); firstMeasure = m, m = m->prevMeasure());
+      // Active selection: select full measure rest of active staff's empty trailing measure
+      else {
+            ChordRest* tempCR = *cr;
+            while (m && (tempCR = m->first()->nextChordRest(trackZeroVoice((*cr)->track()), false))->isFullMeasureRest()) {
+                  *cr = tempCR;
+                  firstMeasure = m;
+                  m = m->prevMeasure();
+                  }
+            }
+      return firstMeasure;
+      }
+
+//---------------------------------------------------------
+//   cmdTopStaff
+//---------------------------------------------------------
+
+ChordRest* Score::cmdTopStaff(ChordRest* cr)
+      {
+      // Go to top-most staff of current or first measure depending upon active selection
+      if (!cr)
+            cr = firstMeasure()->first()->nextChordRest(0, false);
+      else
+            cr = cr->measure()->first()->nextChordRest(0, false);
+      return cr;
+      }
+
 
 //---------------------------------------------------------
 //   hasLyrics

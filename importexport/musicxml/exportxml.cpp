@@ -2391,6 +2391,21 @@ static QString symIdToArtic(const SymId sid)
                   return "detached-legato";
                   break;
 
+            case SymId::articSoftAccentAbove:
+            case SymId::articSoftAccentBelow:
+                  return "soft-accent";
+                  break;
+
+            case SymId::articStressAbove:
+            case SymId::articStressBelow:
+                  return "stress";
+                  break;
+
+            case SymId::articUnstressAbove:
+            case SymId::articUnstressBelow:
+                  return "unstress";
+                  break;
+
             default:
                   ;       // nothing
                   break;
@@ -3949,6 +3964,48 @@ int ExportMusicXml::findHairpin(const Hairpin* hp) const
       }
 
 //---------------------------------------------------------
+//   writeHairpinText
+//---------------------------------------------------------
+
+static void writeHairpinText(XmlWriter& xml, const TextLineBase* const tlb, bool isStart = true)
+      {
+      auto text = isStart ? tlb->beginText() : tlb->endText();
+      while (text != "") {
+            int dynamicLength { 0 };
+            QString dynamicsType;
+            auto dynamicPosition = Dynamic::findInString(text, dynamicLength, dynamicsType);
+            if (dynamicPosition == -1 || dynamicPosition > 0) {
+                  // text remaining and either no dynamic of not at front of text
+                  xml.stag("direction-type");
+                  QString tag = "words";
+                  tag += QString(" font-family=\"%1\"").arg(tlb->getProperty(isStart ? Pid::BEGIN_FONT_FACE : Pid::END_FONT_FACE).toString());
+                  tag += QString(" font-size=\"%1\"").arg(tlb->getProperty(isStart ? Pid::BEGIN_FONT_SIZE : Pid::END_FONT_SIZE).toReal());
+                  tag += fontStyleToXML(static_cast<FontStyle>(tlb->getProperty(isStart ? Pid::BEGIN_FONT_STYLE : Pid::END_FONT_STYLE).toInt()));
+                  tag += positioningAttributes(tlb, isStart);
+                  xml.tag(tag, dynamicPosition == -1 ? text : text.left(dynamicPosition));
+                  xml.etag();
+                  if (dynamicPosition == -1)
+                        text = "";
+                  else if (dynamicPosition > 0) {
+                        text.remove(0, dynamicPosition);
+                        dynamicPosition = 0;
+                        }
+                  }
+            if (dynamicPosition == 0) {
+                  // dynamic at front of text
+                  xml.stag("direction-type");
+                  QString tag = "dynamics";
+                  tag += positioningAttributes(tlb, isStart);
+                  xml.stag(tag);
+                  xml.tagE(dynamicsType);
+                  xml.etag();
+                  xml.etag();
+                  text.remove(0, dynamicLength);
+                  }
+            }
+      }
+
+//---------------------------------------------------------
 //   hairpin
 //---------------------------------------------------------
 
@@ -3986,19 +4043,12 @@ void ExportMusicXml::hairpin(Hairpin const* const hp, int staff, const Fraction&
             }
 
       directionTag(_xml, _attr, hp);
+      if (hp->tick() == tick)
+            writeHairpinText(_xml, hp, hp->tick() == tick);
       if (isLineType) {
             if (hp->tick() == tick) {
                   _xml.stag("direction-type");
-                  QString tag = "words";
-                  tag += QString(" font-family=\"%1\"").arg(hp->getProperty(Pid::BEGIN_FONT_FACE).toString());
-                  tag += QString(" font-size=\"%1\"").arg(hp->getProperty(Pid::BEGIN_FONT_SIZE).toReal());
-                  tag += fontStyleToXML(static_cast<FontStyle>(hp->getProperty(Pid::BEGIN_FONT_STYLE).toInt()));
-                  tag += positioningAttributes(hp, hp->tick() == tick);
-                  _xml.tag(tag, hp->getProperty(Pid::BEGIN_TEXT));
-                  _xml.etag();
-
-                  _xml.stag("direction-type");
-                  tag = "dashes type=\"start\"";
+                  QString tag = "dashes type=\"start\"";
                   tag += QString(" number=\"%1\"").arg(n + 1);
                   tag += positioningAttributes(hp, hp->tick() == tick);
                   _xml.tagE(tag);
@@ -4035,6 +4085,8 @@ void ExportMusicXml::hairpin(Hairpin const* const hp, int staff, const Fraction&
             _xml.tagE(tag);
             _xml.etag();
             }
+      if (hp->tick() != tick)
+            writeHairpinText(_xml, hp, hp->tick() == tick);
       directionETag(_xml, staff);
       }
 
@@ -5358,11 +5410,7 @@ void ExportMusicXml::print(const Measure* const m, const int partNr, const int f
                         _xml.tag("right-margin", QString("%1").arg(QString::number(systemRM,'f',2)) );
                         _xml.etag();
 
-                        if (mpc.pageStart || mpc.scoreStart) {
-                              const double topSysDist = getTenthsFromDots(mmR1->pagePos().y()) - tm;
-                              _xml.tag("top-system-distance", QString("%1").arg(QString::number(topSysDist,'f',2)) );
-                              }
-                        if (mpc.systemStart && !mpc.scoreStart) {
+                        if (mpc.systemStart && !mpc.pageStart) {
                               // see System::layout2() for the factor 2 * score()->spatium()
                               const double sysDist = getTenthsFromDots(mmR1->pagePos().y()
                                                                        - mpc.prevMeasure->pagePos().y()
@@ -5372,6 +5420,10 @@ void ExportMusicXml::print(const Measure* const m, const int partNr, const int f
                               _xml.tag("system-distance",
                                        QString("%1").arg(QString::number(sysDist,'f',2)));
                               }
+                        if (mpc.pageStart || mpc.scoreStart) {
+                              const double topSysDist = getTenthsFromDots(mmR1->pagePos().y()) - tm;
+                              _xml.tag("top-system-distance", QString("%1").arg(QString::number(topSysDist,'f',2)) );
+                        }
 
                         _xml.etag();
                         }
@@ -6592,16 +6644,17 @@ void ExportMusicXml::harmony(Harmony const* const h, FretDiagram const* const fd
                   _xml.stag(QString("harmony print-frame=\"yes\""));     // .append(relative));
             else
                   _xml.stag(QString("harmony print-frame=\"no\""));      // .append(relative));
+            const auto textNameEscaped = h->hTextName().toHtmlEscaped();
             switch (h->harmonyType()) {
                   case HarmonyType::NASHVILLE: {
                         _xml.tag("function", h->hFunction());
-                        QString k = "kind text=\"" + h->hTextName() + "\"";
+                        QString k = "kind text=\"" + textNameEscaped + "\"";
                         _xml.tag(k, "none");
                         }
                         break;
                   case HarmonyType::ROMAN: {
                         // TODO: parse?
-                        _xml.tag("function", h->hTextName());
+                        _xml.tag("function", h->hTextName());   // note: HTML escape done by tag()
                         QString k = "kind text=\"\"";
                         _xml.tag(k, "none");
                         }
@@ -6611,7 +6664,7 @@ void ExportMusicXml::harmony(Harmony const* const h, FretDiagram const* const fd
                         _xml.stag("root");
                         _xml.tag("root-step text=\"\"", "C");
                         _xml.etag();       // root
-                        QString k = "kind text=\"" + h->hTextName() + "\"";
+                        QString k = "kind text=\"" + textNameEscaped + "\"";
                         _xml.tag(k, "none");
                         }
                         break;

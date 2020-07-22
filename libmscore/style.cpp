@@ -272,6 +272,8 @@ static const StyleType styleTypes[] {
       { Sid::harmonyFretDist,          "harmonyFretDist",        Spatium(1.0) },
       { Sid::minHarmonyDistance,       "minHarmonyDistance",     Spatium(0.5) },
       { Sid::maxHarmonyBarDistance,    "maxHarmonyBarDistance",  Spatium(3.0) },
+      { Sid::maxChordShiftAbove,       "maxChordShiftAbove",     Spatium(0.0) },
+      { Sid::maxChordShiftBelow,       "maxChordShiftBelow",     Spatium(0.0) },
 
       { Sid::harmonyPlacement,         "harmonyPlacement",           int(Placement::ABOVE) },
       { Sid::romanNumeralPlacement,    "romanNumeralPlacement",      int(Placement::BELOW) },
@@ -359,6 +361,8 @@ static const StyleType styleTypes[] {
       { Sid::fretStringSpacing,       "fretStringSpacing",       Spatium(0.7) },
       { Sid::fretFretSpacing,         "fretFretSpacing",         Spatium(0.8) },
       { Sid::fretOrientation,         "fretOrientation",         int(Orientation::VERTICAL) },
+      { Sid::maxFretShiftAbove,       "maxFretShiftAbove",       Spatium(0.0) },
+      { Sid::maxFretShiftBelow,       "maxFretShiftBelow",       Spatium(0.0) },
 
       { Sid::showPageNumber,          "showPageNumber",          QVariant(true) },
       { Sid::showPageNumberOne,       "showPageNumberOne",       QVariant(false) },
@@ -830,7 +834,8 @@ static const StyleType styleTypes[] {
       { Sid::measureNumberFontSpatiumDependent, "measureNumberFontSpatiumDependent", true },
       { Sid::measureNumberFontStyle,        "measureNumberFontStyle",       int(FontStyle::Normal) },
       { Sid::measureNumberColor,            "measureNumberColor",           QColor(0, 0, 0, 255) },
-      { Sid::measureNumberOffset,           "measureNumberOffset",          QPointF(0.0, 0.0) },
+      { Sid::measureNumberPosAbove,         "measureNumberOffset",          QPointF(0.0, -2.0) }, // This measureNumberOffset cannot be renamed to measureNumberPosAbove for backward compatibility
+      { Sid::measureNumberPosBelow,         "measureNumberPosBelow",        QPointF(0.0, 2.0) },
       { Sid::measureNumberOffsetType,       "measureNumberOffsetType",      int(OffsetType::SPATIUM)   },
       { Sid::measureNumberVPlacement,       "measureNumberVPlacement",      int(Placement::ABOVE) },
       { Sid::measureNumberHPlacement,       "measureNumberHPlacement",      int(HPlacement::LEFT) },
@@ -1623,7 +1628,7 @@ const TextStyle measureNumberTextStyle {{
       { Sid::measureNumberFontStyle,             Pid::FONT_STYLE             },
       { Sid::measureNumberColor,                 Pid::COLOR                  },
       { Sid::measureNumberAlign,                 Pid::ALIGN                  },
-      { Sid::measureNumberOffset,                Pid::OFFSET                 },
+      { Sid::measureNumberPosAbove,              Pid::OFFSET                 },
       { Sid::measureNumberFrameType,             Pid::FRAME_TYPE             },
       { Sid::measureNumberFramePadding,          Pid::FRAME_PADDING          },
       { Sid::measureNumberFrameWidth,            Pid::FRAME_WIDTH            },

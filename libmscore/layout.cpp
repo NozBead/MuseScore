@@ -843,39 +843,44 @@ void Score::layoutChords3(std::vector<Note*>& notes, const Staff* staff, Segment
             Accidental* ac = note->accidental();
             if (ac && !note->fixed()) {
                   ac->layout();
-                  AcEl acel;
-                  acel.note   = note;
-                  int line    = note->line();
-                  acel.line   = line;
-                  acel.x      = 0.0;
-                  acel.top    = line * 0.5 * sp + ac->bbox().top();
-                  acel.bottom = line * 0.5 * sp + ac->bbox().bottom();
-                  acel.width  = ac->width();
-                  QPointF bboxNE = ac->symBbox(ac->symbol()).topRight();
-                  QPointF bboxSW = ac->symBbox(ac->symbol()).bottomLeft();
-                  QPointF cutOutNE = ac->symCutOutNE(ac->symbol());
-                  QPointF cutOutSW = ac->symCutOutSW(ac->symbol());
-                  if (!cutOutNE.isNull()) {
-                        acel.ascent     = cutOutNE.y() - bboxNE.y();
-                        acel.rightClear = bboxNE.x() - cutOutNE.x();
+                  if (!ac->visible()) {
+                        ac->setPos(ac->bbox().x() - ac->width(), 0.0);
                         }
                   else {
-                        acel.ascent     = 0.0;
-                        acel.rightClear = 0.0;
+                        AcEl acel;
+                        acel.note   = note;
+                        int line    = note->line();
+                        acel.line   = line;
+                        acel.x      = 0.0;
+                        acel.top    = line * 0.5 * sp + ac->bbox().top();
+                        acel.bottom = line * 0.5 * sp + ac->bbox().bottom();
+                        acel.width  = ac->width();
+                        QPointF bboxNE = ac->symBbox(ac->symbol()).topRight();
+                        QPointF bboxSW = ac->symBbox(ac->symbol()).bottomLeft();
+                        QPointF cutOutNE = ac->symCutOutNE(ac->symbol());
+                        QPointF cutOutSW = ac->symCutOutSW(ac->symbol());
+                        if (!cutOutNE.isNull()) {
+                              acel.ascent     = cutOutNE.y() - bboxNE.y();
+                              acel.rightClear = bboxNE.x() - cutOutNE.x();
+                              }
+                        else {
+                              acel.ascent     = 0.0;
+                              acel.rightClear = 0.0;
+                              }
+                        if (!cutOutSW.isNull()) {
+                              acel.descent   = bboxSW.y() - cutOutSW.y();
+                              acel.leftClear = cutOutSW.x() - bboxSW.x();
+                              }
+                        else {
+                              acel.descent   = 0.0;
+                              acel.leftClear = 0.0;
+                              }
+                        int pitchClass = (line + 700) % 7;
+                        acel.next = columnBottom[pitchClass];
+                        columnBottom[pitchClass] = nAcc;
+                        aclist.append(acel);
+                        ++nAcc;
                         }
-                  if (!cutOutSW.isNull()) {
-                        acel.descent   = bboxSW.y() - cutOutSW.y();
-                        acel.leftClear = cutOutSW.x() - bboxSW.x();
-                        }
-                  else {
-                        acel.descent   = 0.0;
-                        acel.leftClear = 0.0;
-                        }
-                  int pitchClass = (line + 700) % 7;
-                  acel.next = columnBottom[pitchClass];
-                  columnBottom[pitchClass] = nAcc;
-                  aclist.append(acel);
-                  ++nAcc;
                   }
 
             Chord* chord = note->chord();
@@ -3287,6 +3292,100 @@ void layoutHarmonies(const std::vector<Segment*>& sl)
       }
 
 //---------------------------------------------------------
+//   almostZero
+//---------------------------------------------------------
+
+bool inline almostZero(qreal value)
+      {
+            // 1e-3 is close enough to zero to see it as zero.
+            return value > -1e-3 && value < 1e-3;
+      }
+//---------------------------------------------------------
+//   alignHarmonies
+//---------------------------------------------------------
+
+void alignHarmonies(const System* system, const std::vector<Segment*>& sl, bool harmony, const qreal maxShiftAbove, const qreal maxShiftBelow)
+      {
+      if (almostZero(maxShiftAbove) && almostZero(maxShiftBelow))
+            return;
+
+      // Collect all fret diagrams and chord symbol and store them per staff.
+      // In the same pass, the maximum height is collected.
+      QMap<int, QList<Element*>> staves;
+      for (const Segment* s : sl) {
+            for (Element* e : s->annotations()) {
+                  if ((harmony && e->isHarmony()) || (!harmony && e->isFretDiagram()))
+                        staves[e->staffIdx()].append(e);
+                  }
+            }
+
+      for (int idx: staves.keys()) {
+            // Align the objects.
+            // Algorithm:
+            //    - Find highest placed harmony/fretdiagram.
+            //    - Align all harmony/fretdiagram objects placed between height and height-maxShiftAbove.
+            //    - Repeat for all harmony/fretdiagram objects below heigt-maxShiftAbove.
+            QList<Element*> modified;
+            while  (!staves[idx].isEmpty()) {
+                  // Pass 1, find highest/lowest place harmony.
+                  qreal referencePositionAbove { 0.0 };
+                  qreal referencePositionBelow { 0.0 };
+                  for (Element* e : staves[idx]) {
+                        if (e->placeAbove() && (referencePositionAbove > e->y()))
+                              referencePositionAbove = e->y();
+                        else if (e->placeBelow() && (referencePositionBelow < e->y()))
+                              referencePositionBelow = e->y();
+                        }
+
+                  if (almostZero(referencePositionAbove) && almostZero(referencePositionBelow))
+                        break;
+
+                  // Pass 2, align all object placed between referencePosition and referencePosition-maxShiftAbove
+                  QList<Element*> again;
+                  while (!staves[idx].isEmpty()) {
+                        Element* e = staves[idx].takeFirst();
+                        if (e->placeAbove() && !almostZero(maxShiftAbove)) {
+                              if (e->y() < (referencePositionAbove + maxShiftAbove)) {
+                                    e->rypos() = referencePositionAbove - e->ryoffset();
+                                    if (e->addToSkyline())
+                                          modified.append(e);
+                                    }
+                              else {
+                                    again.append(e);
+                                    }
+                              }
+                        else if (e->placeBelow() && !almostZero(maxShiftBelow)) {
+                              if (e->y() > (referencePositionBelow - maxShiftBelow)) {
+                                    e->rypos() = referencePositionBelow - e->ryoffset();
+                                    if (e->addToSkyline())
+                                          modified.append(e);
+                                    }
+                              else {
+                                    again.append(e);
+                                    }
+                              }
+                        }
+                  staves[idx].append(again);
+                  }
+
+            // Add all aligned objects to the sky line.
+            for (Element* e : modified) {
+                  const Segment* s = toSegment(e->parent());
+                  const MeasureBase* m = toMeasureBase(s->parent());
+                  system->staff(e->staffIdx())->skyline().add(e->shape().translated(e->pos() + s->pos() + m->pos()));
+                  if (e->isFretDiagram()) {
+                        FretDiagram* fd = toFretDiagram(e);
+                        Harmony* h = fd->harmony();
+                        if (h)
+                              system->staff(e->staffIdx())->skyline().add(h->shape().translated(h->pos() + fd->pos() + s->pos() + m->pos()));
+                        else
+                              system->staff(e->staffIdx())->skyline().add(fd->shape().translated(fd->pos() + s->pos() + m->pos()));
+                        }
+                  }
+            }
+      }
+
+//---------------------------------------------------------
 //   processLines
 //---------------------------------------------------------
 
@@ -4056,8 +4155,10 @@ void Score::layoutSystemElements(System* system, LayoutContext& lc)
       // above the volta, therefore we delay the layout.
       //-------------------------------------------------------------
 
-      if (!hasFretDiagram)
+      if (!hasFretDiagram) {
             layoutHarmonies(sl);
+            alignHarmonies(system, sl, true, styleP(Sid::maxChordShiftAbove), styleP(Sid::maxChordShiftBelow));
+            }
 
       //-------------------------------------------------------------
       // StaffText, InstrumentChange
@@ -4157,6 +4258,7 @@ void Score::layoutSystemElements(System* system, LayoutContext& lc)
             //-------------------------------------------------------------
 
             layoutHarmonies(sl);
+            alignHarmonies(system, sl, false, styleP(Sid::maxFretShiftAbove), styleP(Sid::maxFretShiftBelow));
             }
 
       //-------------------------------------------------------------
@@ -4525,8 +4627,8 @@ void Score::doLayoutRange(const Fraction& st, const Fraction& et)
                   if (sectionBreak && sectionBreak->startWithMeasureOne())
                         lc.measureNo = 0;
                   else
-                        lc.measureNo = lc.nextMeasure->prevMeasure()->no() + 1; // will be adjusted later with respect
-                                                                                // to the user-defined offset.
+                        lc.measureNo = lc.nextMeasure->prevMeasure()->no()                     // will be adjusted later with respect
+                                       + (lc.nextMeasure->prevMeasure()->irregular() ? 0 : 1); // to the user-defined offset.
                   lc.tick      = lc.nextMeasure->tick();
                   }
             }

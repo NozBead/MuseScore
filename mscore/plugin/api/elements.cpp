@@ -11,6 +11,8 @@
 //=============================================================================
 
 #include "elements.h"
+#include "fraction.h"
+#include "part.h"
 #include "libmscore/property.h"
 #include "libmscore/undo.h"
 
@@ -167,6 +169,33 @@ void Note::remove(Ms::PluginAPI::Element* wrapped)
       }
 
 //---------------------------------------------------------
+//   DurationElement::globalDuration
+//---------------------------------------------------------
+
+FractionWrapper* DurationElement::globalDuration() const
+      {
+      return wrap(durationElement()->globalTicks());
+      }
+
+//---------------------------------------------------------
+//   DurationElement::actualDuration
+//---------------------------------------------------------
+
+FractionWrapper* DurationElement::actualDuration() const
+      {
+      return wrap(durationElement()->actualTicks());
+      }
+
+//---------------------------------------------------------
+//   DurationElement::parentTuplet
+//---------------------------------------------------------
+
+Tuplet* DurationElement::parentTuplet()
+      {
+      return wrap<Tuplet>(durationElement()->tuplet());
+      }
+
+//---------------------------------------------------------
 //   Chord::setPlayEventType
 //---------------------------------------------------------
 
@@ -245,6 +274,14 @@ void Chord::remove(Ms::PluginAPI::Element* wrapped)
             chord()->score()->deleteItem(s); // Create undo op and remove the element.
       }
 
+//---------------------------------------------------------
+//   Staff::part
+//---------------------------------------------------------
+
+Part* Staff::part()
+      {
+      return wrap<Part>(staff()->part());
+      }
 
 //---------------------------------------------------------
 //   wrap
@@ -264,6 +301,8 @@ Element* wrap(Ms::Element* e, Ownership own)
                   return wrap<Note>(toNote(e), own);
             case ElementType::CHORD:
                   return wrap<Chord>(toChord(e), own);
+            case ElementType::TUPLET:
+                  return wrap<Tuplet>(toTuplet(e), own);
             case ElementType::SEGMENT:
                   return wrap<Segment>(toSegment(e), own);
             case ElementType::MEASURE:
@@ -271,6 +310,8 @@ Element* wrap(Ms::Element* e, Ownership own)
             case ElementType::PAGE:
                   return wrap<Page>(toPage(e), own);
             default:
+                  if (e->isDurationElement())
+                        return wrap<DurationElement>(toDurationElement(e), own);
                   break;
             }
       return wrap<Element>(e, own);

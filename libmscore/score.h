@@ -27,6 +27,7 @@
 #include "spannermap.h"
 #include "layoutbreak.h"
 #include "property.h"
+#include "sym.h"
 
 namespace Ms {
 
@@ -95,7 +96,6 @@ struct LayoutContext;
 enum class Tid;
 enum class ClefType : signed char;
 enum class BeatType : char;
-enum class SymId;
 enum class Key;
 enum class HairpinType : signed char;
 enum class SegmentType;
@@ -456,6 +456,7 @@ class Score : public QObject, public ScoreElement {
       MStyle _style;
 
       bool _created { false };            ///< file is never saved, has generated name
+      bool _startedEmpty { false };       ///< The score was created from an empty template (typically ":/data/My_First_Score.mscx") during this session, so it doesn't need to be saved if it hasn't been modified.
       QString _tmpName;                   ///< auto saved with this name if not empty
       QString _importedFilePath;          // file from which the score was imported, or empty
 
@@ -487,7 +488,8 @@ class Score : public QObject, public ScoreElement {
       PlayMode _playMode { PlayMode::SYNTHESIZER };
 
       qreal _noteHeadWidth { 0.0 };       // cached value
-      QString accInfo;                    ///< information used by the screen-reader
+      QString accInfo;                    ///< information about selected element(s) for use by screen-readers
+      QString accMessage;                 ///< temporary status message for use by screen-readers
 
       //------------------
 
@@ -502,7 +504,7 @@ class Score : public QObject, public ScoreElement {
       ChordRest* nextTrack(ChordRest* cr);
       ChordRest* prevTrack(ChordRest* cr);
 
-      void padToggle(Pad n, const EditData& ed);
+      void padToggle(Pad p, const EditData& ed);
       void addTempo();
       void addMetronome();
 
@@ -782,6 +784,7 @@ class Score : public QObject, public ScoreElement {
       const QList<Part*>& parts() const    { return _parts; }
 
       void appendPart(Part* p);
+      void appendPart(const InstrumentTemplate*);
       void updateStaffIndex();
       void sortStaves(QList<int>& dst);
 
@@ -841,6 +844,7 @@ class Score : public QObject, public ScoreElement {
       void rebuildTempoAndTimeSigMaps(Measure* m);
       Element* nextElement();
       Element* prevElement();
+      ChordRest* cmdNextPrevSystem(ChordRest*, bool);
 
       void cmd(const QAction*, EditData&);
       int fileDivision(int t) const { return ((qint64)t * MScore::division + _fileDivision/2) / _fileDivision; }
@@ -853,6 +857,8 @@ class Score : public QObject, public ScoreElement {
       ScoreContentState state() const;
       void setCreated(bool val)      { _created = val;        }
       bool created() const           { return _created;       }
+      void setStartedEmpty(bool val) { _startedEmpty = val;   }
+      bool startedEmpty() const      { return _startedEmpty;  }
       bool savedCapture() const      { return _savedCapture;  }
       bool saved() const             { return _saved;         }
       void setSaved(bool v)          { _saved = v;            }
@@ -1033,6 +1039,7 @@ class Score : public QObject, public ScoreElement {
       Element* selectMove(const QString& cmd);
       Element* move(const QString& cmd);
       void cmdEnterRest(const TDuration& d);
+      void enterRest(const TDuration& d, InputState* externalInputState = nullptr);
       void cmdAddInterval(int, const std::vector<Note*>&);
       void cmdCreateTuplet(ChordRest*, Tuplet*);
       void removeAudio();
@@ -1101,6 +1108,7 @@ class Score : public QObject, public ScoreElement {
       void cmdSelectSection();
       void respace(std::vector<ChordRest*>* elements);
       void transposeSemitone(int semitone);
+      void transposeDiatonicAlterations(TransposeDirection direction);
       void insertMeasure(ElementType type, MeasureBase*, bool createEmptyMeasures = false, bool moveSignaturesClef = true);
       Audio* audio() const         { return _audio;    }
       void setAudio(Audio* a)      { _audio = a;       }
@@ -1113,8 +1121,6 @@ class Score : public QObject, public ScoreElement {
 
       QList<Score*> scoreList();
       bool switchLayer(const QString& s);
-      //@ appends to the score a named part as last part
-      void appendPart(const QString&);
       //@ appends to the score a number of measures
       void appendMeasures(int);
 
@@ -1176,8 +1182,14 @@ class Score : public QObject, public ScoreElement {
       void cmdRemoveEmptyTrailingMeasures();
       void cmdRealizeChordSymbols(bool lit = true, Voicing v = Voicing(-1), HDuration durationType = HDuration(-1));
 
+      Measure* firstTrailingMeasure(ChordRest** cr = nullptr);
+      ChordRest* cmdTopStaff(ChordRest* cr = nullptr);
+
       void setAccessibleInfo(QString s)   { accInfo = s.remove(":").remove(";"); }
       QString accessibleInfo() const      { return accInfo;          }
+
+      void setAccessibleMessage(QString s) { accMessage = s; } // retain ':' and ';'
+      QString accessibleMessage() const    { return accMessage; }
 
       QImage createThumbnail();
       QString createRehearsalMarkText(RehearsalMark* current) const;

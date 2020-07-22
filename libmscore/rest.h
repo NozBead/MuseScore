@@ -15,11 +15,11 @@
 
 #include "chordrest.h"
 #include "notedot.h"
+#include "sym.h"
 
 namespace Ms {
 
 class TDuration;
-enum class SymId;
 
 //---------------------------------------------------------
 //    @@ Rest
@@ -75,6 +75,7 @@ class Rest : public ChordRest {
       void write(XmlWriter& xml) const override;
 
       void layoutMMRest(qreal val);
+      QRectF mmRestNumberRect() const;
       qreal mmWidth() const        { return _mmWidth; }
       SymId getSymbol(TDuration::DurationType type, int line, int lines,  int* yoffset);
 
@@ -93,6 +94,7 @@ class Rest : public ChordRest {
       virtual QPointF stemPos() const;
       virtual qreal stemPosX() const;
       virtual QPointF stemPosBeam() const;
+      virtual qreal rightEdge() const override;
 
       void localSpatiumChanged(qreal oldValue, qreal newValue) override;
       QVariant propertyDefault(Pid) const override;
@@ -106,6 +108,7 @@ class Rest : public ChordRest {
       QString accessibleInfo() const override;
       QString screenReaderInfo() const override;
       Shape shape() const override;
+      void editDrag(EditData& editData) override;
       };
 
 }     // namespace Ms

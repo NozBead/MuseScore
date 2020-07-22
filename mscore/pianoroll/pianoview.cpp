@@ -30,6 +30,7 @@
 #include "libmscore/tuplet.h"
 #include "libmscore/segment.h"
 #include "libmscore/noteevent.h"
+#include "libmscore/undo.h"
 #include "libmscore/utils.h"
 
 namespace Ms {
@@ -642,6 +643,14 @@ void PianoView::showPopupMenu(const QPoint& posGlobal)
       connect(act, &QAction::triggered, this, [=](){this->setNotesToVoice(3);});
       popup.addAction(act);
 
+      popup.addSeparator();
+
+      QMenu* menuTuplet = new QMenu(tr("Tuplets"));
+      for (auto i : { "duplet", "triplet", "quadruplet", "quintuplet", "sextuplet",
+            "septuplet", "octuplet", "nonuplet", "tuplet-dialog" })
+            menuTuplet->addAction(getAction(i));
+      popup.addMenu(menuTuplet);
+
       popup.exec(posGlobal);
       }
 
@@ -731,11 +740,13 @@ void PianoView::mouseReleaseEvent(QMouseEvent* event)
                   selectNotes(startTick, endTick, lowPitch, highPitch, selType);
                   }
             else if (_dragStyle == DragStyle::NOTES) {
-                  finishNoteGroupDrag();
+                  if (toolCanDragNotes()) {
+                        finishNoteGroupDrag();
 
-                  //Keep last note drag event, if any
-                  if (_inProgressUndoEvent)
-                        _inProgressUndoEvent = false;
+                        //Keep last note drag event, if any
+                        if (_inProgressUndoEvent)
+                              _inProgressUndoEvent = false;
+                        }
                   }
 
             _dragStarted = false;
@@ -801,7 +812,7 @@ void PianoView::mouseMoveEvent(QMouseEvent* event)
                   int tick = pixelXToTick(_mouseDownPos.x());
                   int mouseDownPitch = pixelYToPitch(_mouseDownPos.y());
                   PianoItem* pi = pickNote(tick, mouseDownPitch);
-                  if (pi) {
+                  if (pi && toolCanDragNotes()) {
                         if (!pi->note()->selected()) {
                               selectNotes(tick, tick, mouseDownPitch, mouseDownPitch, NoteSelectType::REPLACE);
                               }
@@ -809,17 +820,20 @@ void PianoView::mouseMoveEvent(QMouseEvent* event)
                         _dragStartPitch = mouseDownPitch;
                         _dragNoteCache = serializeSelectedNotes();
                         }
-                  else {
+                  else if (!pi && _editNoteTool == PianoRollEditTool::SELECT)
                         _dragStyle = DragStyle::SELECTION_RECT;
-                        }
+                  else
+                        _dragStyle = DragStyle::NONE;
                   }
             }
 
       if (_dragStarted) {
           switch (_editNoteTool) {
           case SELECT:
-//                if (_dragStyle == DragStyle::NOTES)
-//                      dragSelectionNoteGroup();
+          case INSERT_NOTE:
+          case APPEND_NOTE:
+          case CUT_CHORD:
+          case TIE:
                 scene()->update();
                 break;
           case CHANGE_LENGTH:
@@ -878,23 +892,37 @@ void PianoView::dragSelectionNoteGroup() {
 
 
 //---------------------------------------------------------
+//   getSegmentNotes
+//---------------------------------------------------------
+
+QVector<Note*> PianoView::getSegmentNotes(Segment* seg, int track)
+      {
+      QVector<Note*> notes;
+
+      ChordRest* cr = seg->cr(track);
+      if (cr && cr->isChord()) {
+            Chord* chord = toChord(cr);
+            notes.append(QVector<Note*>::fromStdVector(chord->notes()));
+            }
+
+      return notes;
+      }
+
+
+//---------------------------------------------------------
 //   addNote
 //---------------------------------------------------------
 
-void PianoView::addNote(Fraction startTick, Fraction duration, int pitch, int track, bool command)
+QVector<Note*> PianoView::addNote(Fraction startTick, Fraction duration, int pitch, int track)
       {
       NoteVal nv(pitch);
 
       Score* score = _staff->score();
-      Segment* seg = score->tick2segment(startTick);
-      score->expandVoice(seg, track);
+
+      QVector<Note*> addedNotes;
 
       ChordRest* curCr = score->findCR(startTick, track);
-      if (curCr && !curCr->tuplet() && _tuplet == 1) {
-            //Tuplets not handled yet
-            if (command)
-                  score->startCmd();
-
+      if (curCr) {
             ChordRest* cr0 = nullptr;
             ChordRest* cr1 = nullptr;
 
@@ -902,7 +930,6 @@ void PianoView::addNote(Fraction startTick, Fraction duration, int pitch, int tr
                   cutChordRest(curCr, track, startTick, cr0, cr1);  //Cut at the start of existing chord rest
             else
                   cr1 = curCr;  //We are inserting at start of chordrest
-
 
             Fraction cr1End = cr1->tick() + cr1->ticks();
             if (cr1End > startTick + duration) {
@@ -913,26 +940,34 @@ void PianoView::addNote(Fraction startTick, Fraction duration, int pitch, int tr
                   cutChordRest(cr1, track, startTick + duration, crMid, crEnd);
                   if (crMid->isChord()) {
                         Chord* ch = toChord(crMid);
-                        score->addNote(ch, nv);
+                        addedNotes.append(score->addNote(ch, nv));
                         }
-                  else
-                        score->setNoteRest(crMid->segment(), track, nv, duration);
+                  else {
+                        Segment* newSeg = score->setNoteRest(crMid->segment(), track, nv, duration);
+                        if (newSeg)
+                              addedNotes.append(getSegmentNotes(newSeg, track));
+                        }
                   }
             else if (cr1End == startTick + duration) {
                   if (cr1->isChord()) {
                         Chord* ch = toChord(cr1);
-                        score->addNote(ch, nv);
+                        addedNotes.append(score->addNote(ch, nv));
                         }
-                  else
-                        score->setNoteRest(cr1->segment(), track, nv, duration);
+                  else {
+                        Segment* newSeg = score->setNoteRest(cr1->segment(), track, nv, duration);
+                        if (newSeg)
+                              addedNotes.append(getSegmentNotes(newSeg, track));
+                        }
                   }
-            else
-                  score->setNoteRest(cr1->segment(), track, nv, duration);
+            else {
+                  Segment* newSeg = score->setNoteRest(cr1->segment(), track, nv, duration);
+                  if (newSeg)
+                        addedNotes.append(getSegmentNotes(newSeg, track));
+                  }
 
-
-            if (command)
-                  score->endCmd();
             }
+
+      return addedNotes;
       }
 
 
@@ -1109,12 +1144,14 @@ void PianoView::insertNote(int modifiers)
       Segment* seg = score->tick2segment(insertPosition);
       score->expandVoice(seg, track);
 
+      Fraction tupletRatio(_tuplet, 1 << _subdiv);
+
       ChordRest* e = score->findCR(insertPosition, track);
       if (e) {
 
             score->startCmd();
 
-            addNote(insertPosition, noteLen, pickPitch, track, false);
+            addNote(insertPosition, noteLen, pickPitch, track);
 
             score->endCmd();
             }
@@ -1351,8 +1388,19 @@ void PianoView::handleSelectionClick()
 bool PianoView::cutChordRest(ChordRest* targetCr, int track, Fraction cutTick, ChordRest*& cr0, ChordRest*& cr1)
       {
       Fraction startTick = targetCr->segment()->tick();
-      Fraction duration = targetCr->ticks();
-      if (cutTick <= startTick || cutTick >= startTick + duration) {
+      Fraction durationTuplet = targetCr->ticks();
+
+      Fraction measureToTuplet(1, 1);
+      Fraction tupletToMeasure(1, 1);
+      if (targetCr->tuplet()) {
+            Fraction ratio = targetCr->tuplet()->ratio();
+            measureToTuplet = ratio;
+            tupletToMeasure = ratio.inverse();
+            }
+
+      Fraction durationMeasure = durationTuplet * tupletToMeasure;
+
+      if (cutTick <= startTick || cutTick >= startTick + durationMeasure) {
             cr0 = targetCr;
             cr1 = nullptr;
             return false;
@@ -1370,12 +1418,11 @@ bool PianoView::cutChordRest(ChordRest* targetCr, int track, Fraction cutTick, C
             r->setSelected(false);
             }
 
-
       //Subdivide at the cut tick
       NoteVal nv(-1);
 
       Score* score = _staff->score();
-      score->setNoteRest(targetCr->segment(), track, nv, cutTick - targetCr->tick());
+      score->setNoteRest(targetCr->segment(), track, nv, (cutTick - targetCr->tick()) * measureToTuplet);
       ChordRest *nextCR = score->findCR(cutTick, track);
 
       Chord* ch0 = 0;
@@ -1711,7 +1758,7 @@ void PianoView::setNotesToVoice(int voice) {
       for (int i = 0; i < notes.size(); ++i) {
             Note* note = notes.at(i);
 
-            addNote(note->tick(), note->chord()->ticks(), note->pitch(), voice, false);
+            addNote(note->tick(), note->chord()->ticks(), note->pitch(), voice);
             score->deleteItem(note);
             }
 
@@ -1830,6 +1877,9 @@ QString PianoView::serializeSelectedNotes()
 
                   int voice = note->voice();
 
+                  int veloOff = note->veloOffset();
+                  Note::ValueType veloType = note->veloType();
+
                   xml.writeStartElement("note");
                   xml.writeAttribute("startN", QString::number(startTick.numerator()));
                   xml.writeAttribute("startD", QString::number(startTick.denominator()));
@@ -1837,6 +1887,19 @@ QString PianoView::serializeSelectedNotes()
                   xml.writeAttribute("lenD", QString::number(len.denominator()));
                   xml.writeAttribute("pitch", QString::number(pitch));
                   xml.writeAttribute("voice", QString::number(voice));
+                  xml.writeAttribute("veloOff", QString::number(veloOff));
+                  xml.writeAttribute("veloType", veloType == Note::ValueType::OFFSET_VAL ? "o" : "u");
+
+                  for (NoteEvent& evt : note->playEvents()) {
+                        int ontime = evt.ontime();
+                        int len = evt.len();
+
+                        xml.writeStartElement("evt");
+                        xml.writeAttribute("ontime", QString::number(ontime));
+                        xml.writeAttribute("len", QString::number(len));
+                        xml.writeEndElement();
+                        }
+
                   xml.writeEndElement();
                   }
             }
@@ -1963,6 +2026,7 @@ void PianoView::pasteNotes(const QString& copiedNotes, Fraction pasteStartTick, 
 
       QXmlStreamReader xml(copiedNotes);
       Fraction firstTick;
+      QVector<Note*> addedNotes;
 
       while (!xml.atEnd()) {
             QXmlStreamReader::TokenType tt = xml.readNext();
@@ -1984,11 +2048,34 @@ void PianoView::pasteNotes(const QString& copiedNotes, Fraction pasteStartTick, 
                         int pitch = xml.attributes().value("pitch").toString().toInt();
                         int voice = xml.attributes().value("voice").toString().toInt();
 
+                        int veloOff = xml.attributes().value("veloOff").toString().toInt();
+                        QString veloTypeStrn = xml.attributes().value("veloType").toString();
+                        Note::ValueType veloType = veloTypeStrn == "o" ? Note::ValueType::OFFSET_VAL : Note::ValueType::USER_VAL;
+
                         int track = _staff->idx() * VOICES + voice;
 
                         Fraction pos = xIsOffset ? startTick + pasteStartTick : startTick - firstTick + pasteStartTick;
 
-                        addNote(pos, tickLen, pitch + pitchOffset, track, false);
+                        addedNotes = addNote(pos, tickLen, pitch + pitchOffset, track);
+                        for (Note* note: addedNotes) {
+                              note->setVeloOffset(veloOff);
+                              note->setVeloType(veloType);
+                              }
+                        }
+                  if (xml.name().toString() == "evt") {
+                        int ontime = xml.attributes().value("ontime").toString().toInt();
+                        int len = xml.attributes().value("len").toString().toInt();
+
+                        NoteEvent ne;
+                        ne.setOntime(ontime);
+                        ne.setLen(len);
+                        for (Note* note: addedNotes) {
+                              NoteEventList& evtList = note->playEvents();
+                              if (!evtList.isEmpty()) {
+                                    NoteEvent* evt = note->noteEvent(evtList.length() - 1);
+                                    _staff->score()->undo(new ChangeNoteEvent(note, evt, ne));
+                                    }
+                              }
                         }
                   }
             }

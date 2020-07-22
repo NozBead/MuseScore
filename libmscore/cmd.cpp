@@ -805,7 +805,7 @@ Segment* Score::setNoteRest(Segment* segment, int track, NoteVal nval, Fraction 
 
             cr = toChordRest(segment->element(track));
 
-            if (cr == 0) {
+            if (!cr) {
                   if (track % VOICES)
                         cr = addRest(segment, track, TDuration(TDuration::DurationType::V_MEASURE), 0);
                   else {
@@ -982,35 +982,20 @@ Fraction Score::makeGap(Segment* segment, int track, const Fraction& _sd, Tuplet
                   //
                   accumulated = _sd;
                   Fraction rd = td - sd;
+                  Fraction tick = cr->tick() + actualTicks(sd, tuplet, timeStretch);
 
-                  std::vector<TDuration> dList = toDurationList(rd, false);
+                  std::vector<TDuration> dList = toRhythmicDurationList(rd, true, tick - measure->tick(), sigmap()->timesig(tick).nominal(), measure, 0);
                   if (dList.empty())
                         break;
 
-                  Fraction tick = cr->tick() + actualTicks(sd, tuplet, timeStretch);
-
-                  if ((tuplet == 0) && (((measure->tick() - tick).ticks() % dList[0].ticks().ticks()) == 0)) {
-                        for (TDuration d : dList) {
-                              if (ltuplet) {
-                                    // take care not to recreate tuplet we just deleted
-                                    Rest* r = setRest(tick, track, d.fraction(), false, 0, false);
-                                    tick += r->actualTicks();
-                                    }
-                              else {
-                                    tick += addClone(cr, tick, d)->actualTicks();
-                                    }
+                  for (TDuration d : dList) {
+                        if (ltuplet) {
+                              // take care not to recreate tuplet we just deleted
+                              Rest* r = setRest(tick, track, d.fraction(), false, 0, false);
+                              tick += r->actualTicks();
                               }
-                        }
-                  else {
-                        for (size_t i = dList.size(); i > 0; --i) { // loop needs to be in this reverse order
-                              if (ltuplet) {
-                                    // take care not to recreate tuplet we just deleted
-                                    Rest* r = setRest(tick, track, dList[i-1].fraction(), false, 0, false);
-                                    tick += r->actualTicks();
-                                    }
-                              else {
-                                    tick += addClone(cr, tick, dList[i-1])->actualTicks();
-                                    }
+                        else {
+                              tick += addClone(cr, tick, d)->actualTicks();
                               }
                         }
                   break;
@@ -1186,7 +1171,7 @@ bool Score::makeGapVoice(Segment* seg, int track, Fraction len, const Fraction& 
             Segment* s = m->undoGetSegment(SegmentType::ChordRest, m->tick());
             int t  = cr->track();
             cr = toChordRest(s->element(t));
-            if (cr == 0) {
+            if (!cr) {
                   addRest(s, t, TDuration(TDuration::DurationType::V_MEASURE), 0);
                   cr = toChordRest(s->element(t));
                   }
@@ -1685,6 +1670,8 @@ void Score::upDownDelta(int pitchDelta)
 void Score::addArticulation(SymId attr)
       {
       QSet<Chord*> set;
+      int numAdded = 0;
+      int numRemoved = 0;
       for (Element* el : selection().elements()) {
             if (el->isNote() || el->isChord()) {
                   Chord* cr = 0;
@@ -1696,12 +1683,26 @@ void Score::addArticulation(SymId attr)
                         }
                   Articulation* na = new Articulation(this);
                   na->setSymId(attr);
-                  if (!addArticulation(el, na))
+                  if (addArticulation(el, na)) {
+                        ++numAdded;
+                        }
+                  else {
                         delete na;
+                        ++numRemoved;
+                        }
                   if (cr)
                         set.insert(cr);
                   }
             }
+      QString msg = Sym::id2userName(attr);
+      if (numAdded == 1 && numRemoved == 0)
+            msg = QObject::tr("%1 added").arg(msg);
+      else if (numAdded == 0 && numRemoved == 1)
+            msg = QObject::tr("%1 removed").arg(msg);
+      else
+            msg = QObject::tr("%1, added %2, removed %3")
+                  .arg(msg).arg(numAdded).arg(numRemoved);
+      setAccessibleMessage(msg);
       }
 
 //---------------------------------------------------------
@@ -2028,7 +2029,7 @@ void Score::cmdResetBeamMode()
       for (Segment* seg = selection().firstChordRestSegment(); seg && seg->tick() < endTick; seg = seg->next1(SegmentType::ChordRest)) {
             for (int track = selection().staffStart() * VOICES; track < selection().staffEnd() * VOICES; ++track) {
                   ChordRest* cr = toChordRest(seg->element(track));
-                  if (cr == 0)
+                  if (!cr)
                         continue;
                   if (cr->type() == ElementType::CHORD) {
                         if (cr->beamMode() != Beam::Mode::AUTO)
@@ -2240,8 +2241,10 @@ Element* Score::move(const QString& cmd)
       else
             cr = selection().lastChordRest();
 
-      // no chord/rest found? look for another type of element
-      if (cr == 0) {
+      // no chord/rest found? look for another type of element,
+      // but commands [empty-trailing-measure] and [top-staff] don't
+      // necessarily need an active selection for appropriate functioning
+      if (!cr && cmd != "empty-trailing-measure" && cmd != "top-staff") {
             if (selection().elements().empty())
                   return 0;
             // retrieve last element of section list
@@ -2305,7 +2308,7 @@ Element* Score::move(const QString& cmd)
                   return trg;
                   }
             // if no chordrest found, do nothing
-            if (cr == 0)
+            if (!cr)
                   return 0;
             // if some chordrest found, continue with default processing
             }
@@ -2390,6 +2393,16 @@ Element* Score::move(const QString& cmd)
             if (noteEntryMode())
                   _is.moveInputPos(el);
             }
+      else if (cmd == "next-system") {
+            el = cmdNextPrevSystem(cr, true);
+            if (noteEntryMode())
+                  _is.moveInputPos(el);
+            }
+      else if (cmd == "prev-system") {
+            el = cmdNextPrevSystem(cr, false);
+            if (noteEntryMode())
+                  _is.moveInputPos(el);
+            }
       else if (cmd == "next-track") {
             el = nextTrack(cr);
             if (noteEntryMode())
@@ -2400,6 +2413,44 @@ Element* Score::move(const QString& cmd)
             if (noteEntryMode())
                   _is.moveInputPos(el);
             }
+      else if (cmd == "top-staff") {
+             // No valid selection: Go to the top staff of score's first measure.
+             if (!cr)
+                   el = cmdTopStaff();
+             // Go to the top of current measure.
+             else
+                   el = cmdTopStaff(cr);
+             if (noteEntryMode())
+                   _is.moveInputPos(el);
+             }
+       else if (cmd == "empty-trailing-measure") {
+             // Ensures a valid Element if no empty-trailing-measure exists
+             // by utilizing the score's last measure.
+
+             // Entire score: don't yet have a valid active element
+             if (!cr) {
+                   auto ftm = firstTrailingMeasure();
+                   if (!ftm)
+                         ftm = lastMeasure();
+                   el = ftm->first()->nextChordRest(0, false);
+                   }
+
+             // Staff-Specific trailing measure:
+             else {
+                   // Store current position
+                   auto tmp = cr;
+                   // Get first trailing measure and its accompanying chord-rest
+                   auto ftm = firstTrailingMeasure(&cr);
+                   if ((cr->measure() != ftm) && (cr->measure() == tmp->measure()))
+                         el = lastMeasure()->first()->nextChordRest(tmp->track(), false);
+                   else
+                         el = cr;
+                   }
+
+             // Note: Due to the nature of this command, ensure Note-Entry Mode afterwards
+             // from within ScoreView::cmd()
+             _is.moveInputPos(el);
+             }
 
       if (el) {
             if (el->type() == ElementType::CHORD)
@@ -2433,9 +2484,9 @@ Element* Score::selectMove(const QString& cmd)
             cr = selection().activeCR();
       else
             cr = selection().lastChordRest();
-      if (cr == 0 && noteEntryMode())
+      if (!cr && noteEntryMode())
             cr = inputState().cr();
-      if (cr == 0)
+      if (!cr)
             return 0;
 
       ChordRest* el = 0;
@@ -3131,7 +3182,7 @@ void Score::cmdRealizeChordSymbols(bool literal, Voicing voicing, HDuration dura
             if (!h->isRealizable())
                   continue;
             RealizedHarmony r = h->getRealizedHarmony();
-            Segment* seg = toSegment(h->parent());
+            Segment* seg = h->parent()->isSegment() ? toSegment(h->parent()) : toSegment(h->parent()->parent());
             Fraction duration = r.getActualDuration(durationType);
             Fraction tick = seg->tick();
             bool concertPitch = styleB(Sid::concertPitch);
@@ -3293,7 +3344,7 @@ Segment* Score::setChord(Segment* segment, int track, Chord* chordTemplate, Frac
 
             cr = toChordRest(segment->element(track));
 
-            if (cr == 0) {
+            if (!cr) {
                   if (track % VOICES)
                         cr = addRest(segment, track, TDuration(TDuration::DurationType::V_MEASURE), 0);
                   else {
@@ -3427,19 +3478,9 @@ void Score::addRemoveBreaks(int interval, bool lock)
 
 void Score::cmdRemoveEmptyTrailingMeasures()
       {
-      MasterScore* score = masterScore();
-      Measure* firstMeasure;
-      Measure* lastMeasure = score->lastMeasure();
-      if (!lastMeasure || !lastMeasure->isFullMeasureRest())
-            return;
-      firstMeasure = lastMeasure;
-      for (firstMeasure = lastMeasure;;) {
-            Measure* m = firstMeasure->prevMeasure();
-            if (!m || !m->isFullMeasureRest())
-                  break;
-            firstMeasure = m;
-            }
-      deleteMeasures(firstMeasure, lastMeasure);
+      auto beginMeasure = firstTrailingMeasure();
+      if (beginMeasure)
+            deleteMeasures(beginMeasure, lastMeasure());
       }
 
 //---------------------------------------------------------
@@ -3823,7 +3864,9 @@ void Score::cmdAddPitch(const EditData& ed, int note, bool addFlag, bool insert)
                               if (seg->isChordRestType()) {
                                     Element* p = seg->element(is.track());
                                     if (p && p->isChord()) {
-                                          curPitch = toChord(p)->downNote()->epitch();
+                                          Note* n = toChord(p)->downNote();
+                                          // forget any accidental and/or adjustment due to key signature
+                                          curPitch = n->epitch() - static_cast<int>(tpc2alter(n->tpc()));
                                           break;
                                           }
                                     }
@@ -4002,6 +4045,7 @@ void Score::cmd(const QAction* a, EditData& ed)
             const char* name;
             std::function<void(Score* cs, EditData& ed)> cmd;
             };
+
       static const std::vector<ScoreCmd> cmdList {
             { "note-c",                     [](Score* cs, EditData& ed){ cs->cmdAddPitch(ed, 0, false, false);                        }},
             { "note-d",                     [](Score* cs, EditData& ed){ cs->cmdAddPitch(ed, 1, false, false);                        }},
@@ -4079,8 +4123,8 @@ void Score::cmd(const QAction* a, EditData& ed)
             { "pad-note-256-TAB",           [](Score* cs, EditData& ed){ cs->padToggle(Pad::NOTE256, ed);                             }},
             { "pad-note-512",               [](Score* cs, EditData& ed){ cs->padToggle(Pad::NOTE512, ed);                             }},
             { "pad-note-512-TAB",           [](Score* cs, EditData& ed){ cs->padToggle(Pad::NOTE512, ed);                             }},
-            { "pad-note-1024",              [](Score* cs, EditData& ed){ cs->padToggle(Pad::NOTE1024, ed);                             }},
-            { "pad-note-1024-TAB",          [](Score* cs, EditData& ed){ cs->padToggle(Pad::NOTE1024, ed);                             }},
+            { "pad-note-1024",              [](Score* cs, EditData& ed){ cs->padToggle(Pad::NOTE1024, ed);                            }},
+            { "pad-note-1024-TAB",          [](Score* cs, EditData& ed){ cs->padToggle(Pad::NOTE1024, ed);                            }},
             { "reset-style",                [](Score* cs, EditData&){ cs->cmdResetStyle();                                            }},
             { "reset-beammode",             [](Score* cs, EditData&){ cs->cmdResetBeamMode();                                         }},
             { "reset-groupings",            [](Score* cs, EditData&){ cs->cmdResetNoteAndRestGroupings();                             }},
@@ -4133,9 +4177,11 @@ void Score::cmd(const QAction* a, EditData& ed)
             { "add-audio",                  [](Score* cs, EditData&){ cs->addAudioTrack();                                            }},
             { "transpose-up",               [](Score* cs, EditData&){ cs->transposeSemitone(1);                                       }},
             { "transpose-down",             [](Score* cs, EditData&){ cs->transposeSemitone(-1);                                      }},
+            { "pitch-up-diatonic-alterations",   [](Score* cs, EditData&){ cs->transposeDiatonicAlterations(TransposeDirection::UP);  }},
+            { "pitch-down-diatonic-alterations", [](Score* cs, EditData&){ cs->transposeDiatonicAlterations(TransposeDirection::DOWN);}},
             { "delete",                     [](Score* cs, EditData&){ cs->cmdDeleteSelection();                                       }},
             { "full-measure-rest",          [](Score* cs, EditData&){ cs->cmdFullMeasureRest();                                       }},
-            { "toggle-insert-mode",         [](Score* cs, EditData&){ cs->_is.setInsertMode(!cs->_is.insertMode());                       }},
+            { "toggle-insert-mode",         [](Score* cs, EditData&){ cs->_is.setInsertMode(!cs->_is.insertMode());                   }},
             { "pitch-up",                   [](Score* cs, EditData&){ cs->cmdPitchUp();                                               }},
             { "pitch-down",                 [](Score* cs, EditData&){ cs->cmdPitchDown();                                             }},
             { "time-delete",                [](Score* cs, EditData&){ cs->cmdTimeDelete();                                            }},

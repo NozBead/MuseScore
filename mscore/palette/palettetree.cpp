@@ -21,6 +21,7 @@
 
 #include "globals.h"
 #include "musescore.h"
+#include "palette.h"
 #include "preferences.h"
 #include "shortcut.h"
 
@@ -122,6 +123,7 @@ const char* PaletteCell::translationContext() const
       switch (type) {
             case ElementType::ACCIDENTAL:
             case ElementType::ARTICULATION:
+            case ElementType::BAR_LINE:
             case ElementType::BREATH:
             case ElementType::FERMATA:
             case ElementType::SYMBOL:
@@ -706,6 +708,15 @@ bool PalettePanel::insertCell(int idx, PaletteCellPtr cell)
       }
 
 //---------------------------------------------------------
+//   PalettePanel::scaledGridSize
+//---------------------------------------------------------
+
+QSize PalettePanel::scaledGridSize() const
+      {
+      return gridSize() * Palette::guiMag();
+      }
+
+//---------------------------------------------------------
 //   isSame
 ///   Helper function to compare two Elements
 // TODO: make it operator==?
@@ -986,7 +997,10 @@ static void paintScoreElement(QPainter& p, Element* e, qreal spatium, bool align
       p.scale(sizeRatio, sizeRatio); // scale coordinates so element is drawn at correct size
 
       e->layout(); // calculate bbox
-      QPointF origin = e->bbox().center();
+
+      //! NOTE `static_cast<const Element*>(e)` is needed for the `const QRectF& bbox() const` method to be called
+      //! This method is overridden for some elements, in particular for Glissando
+      QPointF origin = static_cast<const Element* >(e)->bbox().center();
 
       if (alignToStaff) {
             origin.setY(0.0); // y = 0 is position of the element's parent.

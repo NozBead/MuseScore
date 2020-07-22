@@ -98,6 +98,7 @@ int     MScore::pedalEventsMinTicks;
 
 bool    MScore::playRepeats;
 bool    MScore::panPlayback;
+int     MScore::playbackSpeedIncrement;
 qreal   MScore::nudgeStep;
 qreal   MScore::nudgeStep10;
 qreal   MScore::nudgeStep50;
@@ -303,13 +304,14 @@ void MScore::init()
       selectColor[2].setNamedColor("#C53F00");   //orange
       selectColor[3].setNamedColor("#C31989");   //purple
 
-      defaultColor        = Qt::black;
-      dropColor           = QColor("#1778db");
-      defaultPlayDuration = 300;      // ms
-      warnPitchRange      = true;
-      pedalEventsMinTicks = 1;
-      playRepeats         = true;
-      panPlayback         = true;
+      defaultColor           = Qt::black;
+      dropColor              = QColor("#1778db");
+      defaultPlayDuration    = 300;      // ms
+      warnPitchRange         = true;
+      pedalEventsMinTicks    = 1;
+      playRepeats            = true;
+      panPlayback            = true;
+      playbackSpeedIncrement = 5;
 
       lastError           = "";
 
@@ -375,6 +377,19 @@ void MScore::init()
                         exit(-1);
                   }
             }
+#endif
+// Workaround for QTBUG-73241 (solved in Qt 5.12.2) in Windows 10, see https://musescore.org/en/node/280244
+#if defined(Q_OS_WIN) && (QT_VERSION < QT_VERSION_CHECK(5, 12, 2))
+if (QOperatingSystemVersion::current().majorVersion() >= 10) {
+      const QDir additionalFontsDir(QString("%1/Microsoft/Windows/Fonts").arg(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)));
+      if (additionalFontsDir.exists()) {
+            QFileInfoList fileList = additionalFontsDir.entryInfoList();
+            for (int i = 0; i < fileList.size(); ++i) {
+                  QFileInfo fileInfo = fileList.at(i);
+                  QFontDatabase::addApplicationFont(fileInfo.filePath());
+                  }
+            }
+      }
 #endif
       initScoreFonts();
       StaffType::initStaffTypes();

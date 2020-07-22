@@ -50,7 +50,7 @@
 #include "libmscore/note.h"
 #include "libmscore/staff.h"
 #include "libmscore/harmony.h"
-#include "magbox.h"
+#include "zoombox.h"
 #include "libmscore/sig.h"
 #include "libmscore/undo.h"
 #include "synthcontrol.h"
@@ -290,10 +290,6 @@ const std::list<const char*> MuseScore::_allPlaybackControlEntries {
 
 extern TextPalette* textPalette;
 
-static constexpr double SCALE_MAX  = 16.0;
-static constexpr double SCALE_MIN  = 0.05;
-static constexpr double SCALE_STEP = 1.7;
-
 static const char* saveOnlineMenuItem = "file-save-online";
 
 #ifdef BUILD_TELEMETRY_MODULE
@@ -366,14 +362,14 @@ void MuseScore::closeEvent(QCloseEvent* ev)
       unloadPlugins();
       QList<MasterScore*> removeList;
       for (MasterScore* score : scoreList) {
-            // Prompt the user to save the score if it's "dirty" (has unsaved changes) or if it's newly created.
+            // Prompt the user to save the score if it's "dirty" (has unsaved changes) or if it's newly created but non-empty.
             if (checkDirty(score)) {
                   // The user has canceled out entirely, so ignore the close event.
                   ev->ignore();
                   return;
                   }
-            // If the score is still flagged as newly created at this point, it means that the user has just chosen to discard it,
-            // so we need to remove it from the list of scores to be saved to the session file.
+            // If the score is still flagged as newly created at this point, it means that either it's empty or the user has just
+            // chosen to discard it, so we need to remove it from the list of scores to be saved to the session file.
             if (score->created())
                   removeList.append(score);
             }
@@ -412,6 +408,7 @@ void updateExternalValuesFromPreferences() {
       MScore::defaultPlayDuration = preferences.getInt(PREF_SCORE_NOTE_DEFAULTPLAYDURATION);
       MScore::panPlayback = preferences.getBool(PREF_APP_PLAYBACK_PANPLAYBACK);
       MScore::playRepeats = preferences.getBool(PREF_APP_PLAYBACK_PLAYREPEATS);
+      MScore::playbackSpeedIncrement = preferences.getInt(PREF_APP_PLAYBACK_SPEEDINCREMENT);
       MScore::warnPitchRange = preferences.getBool(PREF_SCORE_NOTE_WARNPITCHRANGE);
       MScore::pedalEventsMinTicks = preferences.getInt(PREF_IO_MIDI_PEDAL_EVENTS_MIN_TICKS);
       MScore::layoutBreakColor = preferences.getColor(PREF_UI_SCORE_LAYOUTBREAKCOLOR);
@@ -448,7 +445,7 @@ void updateExternalValuesFromPreferences() {
 //   preferencesChanged
 //---------------------------------------------------------
 
-void MuseScore::preferencesChanged(bool fromWorkspace)
+void MuseScore::preferencesChanged(bool fromWorkspace, bool changeUI)
       {
       updateExternalValuesFromPreferences();
 
@@ -460,7 +457,14 @@ void MuseScore::preferencesChanged(bool fromWorkspace)
       getAction("show-tours")->setChecked(preferences.getBool(PREF_UI_APP_STARTUP_SHOWTOURS));
       _statusBar->setVisible(preferences.getBool(PREF_UI_APP_SHOWSTATUSBAR));
 
-      MuseScore::updateUiStyleAndTheme();
+      if (!cs)
+            zoomBox->resetToDefaultLogicalZoom();
+
+      if (playPanel)
+            playPanel->setSpeedIncrement(preferences.getInt(PREF_APP_PLAYBACK_SPEEDINCREMENT));
+
+      if (changeUI)
+            MuseScore::updateUiStyleAndTheme(); // this is a slow operation
       updateIcons();
 
       QString fgWallpaper = preferences.getString(PREF_UI_CANVAS_FG_WALLPAPER);
@@ -915,6 +919,12 @@ bool MuseScore::isInstalledExtension(QString extensionId)
 
 void MuseScore::populateFileOperations()
       {
+      // Save the current zoom and view-mode combobox states. if any.
+      const auto zoomBoxState = zoomBox
+         ? std::make_pair(zoomBox->currentIndex(), zoomBox->itemText(static_cast<int>(ZoomIndex::ZOOM_FREE)))
+         : std::make_pair(-1, QString());
+      const auto viewModeComboIndex = viewModeCombo ? viewModeCombo->currentIndex() : -1;
+
       fileTools->clear();
 
       if (qApp->layoutDirection() == Qt::LayoutDirection::LeftToRight) {
@@ -938,9 +948,16 @@ void MuseScore::populateFileOperations()
 
       // Currently not customizable in ToolbarEditor
       fileTools->addSeparator();
-      mag = new MagBox;
-      connect(mag, SIGNAL(magChanged(MagIdx)), SLOT(magChanged(MagIdx)));
-      fileTools->addWidget(mag);
+      zoomBox = new ZoomBox;
+
+      // Restore the saved zoom combobox index and text, if any.
+      if (zoomBoxState.first != -1) {
+            zoomBox->setCurrentIndex(zoomBoxState.first);
+            zoomBox->setItemText(static_cast<int>(ZoomIndex::ZOOM_FREE), zoomBoxState.second);
+            }
+
+      connect(zoomBox, SIGNAL(zoomChanged(const ZoomIndex, const qreal)), SLOT(zoomBoxChanged(const ZoomIndex, const qreal)));
+      fileTools->addWidget(zoomBox);
 
       viewModeCombo = new QComboBox(this);
 #if defined(Q_OS_MAC)
@@ -954,6 +971,10 @@ void MuseScore::populateFileOperations()
       viewModeCombo->addItem(tr("Page View"), int(LayoutMode::PAGE));
       viewModeCombo->addItem(tr("Continuous View"), int(LayoutMode::LINE));
       viewModeCombo->addItem(tr("Single Page"), int(LayoutMode::SYSTEM));
+
+      // Restore the saved view-mode combobox index, if any.
+      if (viewModeComboIndex != -1)
+            viewModeCombo->setCurrentIndex(viewModeComboIndex);
 
       connect(viewModeCombo, SIGNAL(activated(int)), SLOT(switchLayoutMode(int)));
       fileTools->addWidget(viewModeCombo);
@@ -1198,8 +1219,7 @@ MuseScore::MuseScore()
       QAction* a;
 #ifdef HAS_MIDI
       a  = getAction("midi-on");
-      a->setEnabled(preferences.getBool(PREF_IO_MIDI_ENABLEINPUT));
-      a->setChecked(_midiinEnabled);
+      a->setChecked(preferences.getBool(PREF_IO_MIDI_ENABLEINPUT));
 #endif
 
       getAction("undo")->setEnabled(false);
@@ -1843,7 +1863,7 @@ MuseScore::MuseScore()
       Workspace::addActionAndString(aboutMusicXMLAction, "about-musicxml");
 
 #if defined(Q_OS_MAC) || defined(Q_OS_WIN)
-#if !defined(FOR_WINSTORE)
+#if (!defined(FOR_WINSTORE)) && (!defined(WIN_PORTABLE))
       checkForUpdateAction = new QAction("", 0);
       connect(checkForUpdateAction, SIGNAL(triggered()), this, SLOT(checkForUpdatesUI()));
       checkForUpdateAction->setMenuRole(QAction::NoRole);
@@ -2682,6 +2702,7 @@ void MuseScore::setCurrentScoreView(ScoreView* view)
                   }
             if (_inspector)
                   _inspector->update(0);
+            zoomBox->resetToDefaultLogicalZoom();
             viewModeCombo->setEnabled(false);
             if (_textTools) {
                   _textTools->hide();
@@ -2720,13 +2741,7 @@ void MuseScore::setCurrentScoreView(ScoreView* view)
       getAction("split-measure")->setEnabled(cs->masterScore()->excerpts().size() == 0);
       updateUndoRedo();
 
-      MagIdx midx = cv->magIdx();
-      if (midx == MagIdx::MAG_FREE)
-            mag->setMag(view->lmag());
-      else {
-            mag->setMagIdx(midx);
-            magChanged(midx);
-            }
+      setZoom(cv->zoomIndex(), cv->logicalZoomLevel());
 
       updateWindowTitle(cs);
       setWindowModified(cs->dirty());
@@ -3002,6 +3017,28 @@ void MuseScore::reDisplayDockWidget(QDockWidget* widget, bool visible)
       }
 
 //---------------------------------------------------------
+//   createPlayPanel
+//---------------------------------------------------------
+
+void MuseScore::createPlayPanel()
+      {
+      if (!playPanel) {
+            playPanel = new PlayPanel(this);
+            connect(playPanel, SIGNAL(metronomeGainChanged(float)), seq, SLOT(setMetronomeGain(float)));
+            connect(playPanel, SIGNAL(speedChanged(double)), seq, SLOT(setRelTempo(double)));
+            connect(playPanel, SIGNAL(posChange(int)), seq, SLOT(seek(int)));
+            connect(playPanel, SIGNAL(closed(bool)), playId, SLOT(setChecked(bool)));
+            connect(synti, SIGNAL(gainChanged(float)), playPanel, SLOT(setGain(float)));
+            playPanel->setSpeedIncrement(preferences.getInt(PREF_APP_PLAYBACK_SPEEDINCREMENT));
+            playPanel->setGain(synti->gain());
+            playPanel->setScore(cs);
+            addDockWidget(Qt::RightDockWidgetArea, playPanel);
+            playPanel->setVisible(false);
+            playPanel->setFloating(false);
+            }
+      }
+
+//---------------------------------------------------------
 //   showPlayPanel
 //---------------------------------------------------------
 
@@ -3012,15 +3049,8 @@ void MuseScore::showPlayPanel(bool visible)
       if (playPanel == 0) {
             if (!visible)
                   return;
-            playPanel = new PlayPanel(this);
-            connect(playPanel, SIGNAL(metronomeGainChanged(float)), seq, SLOT(setMetronomeGain(float)));
-            connect(playPanel, SIGNAL(relTempoChanged(double)),seq, SLOT(setRelTempo(double)));
-            connect(playPanel, SIGNAL(posChange(int)),         seq, SLOT(seek(int)));
-            connect(playPanel, SIGNAL(closed(bool)),          playId,   SLOT(setChecked(bool)));
-            connect(synti,     SIGNAL(gainChanged(float)), playPanel, SLOT(setGain(float)));
-            playPanel->setGain(synti->gain());
-            playPanel->setScore(cs);
-            addDockWidget(Qt::RightDockWidgetArea, playPanel);
+
+            createPlayPanel();
 
             // The play panel must be set visible before being set floating for positioning
             // and window geometry reasons.
@@ -3070,24 +3100,29 @@ void MuseScore::restartAudioEngine()
       }
 
 //---------------------------------------------------------
-//   midiinToggled
+//   enableMidiIn
 //---------------------------------------------------------
 
-void MuseScore::midiinToggled(bool val)
+void MuseScore::enableMidiIn(const bool enable)
       {
-      _midiinEnabled = val;
+      // This function must be called only when handling the "midi-on" action.
+      Q_ASSERT(getAction("midi-on")->isChecked() == enable);
 
-      if (_midiinEnabled)
+      const auto wasEnabled = isMidiInEnabled();
+
+      preferences.setPreference(PREF_IO_MIDI_ENABLEINPUT, enable);
+
+      if (enable && !wasEnabled)
             restartAudioEngine();
       }
 
 //---------------------------------------------------------
-//   midiinEnabled
+//   isMidiInEnabled
 //---------------------------------------------------------
 
-bool MuseScore::midiinEnabled() const
+bool MuseScore::isMidiInEnabled() const
       {
-      return preferences.getBool(PREF_IO_MIDI_ENABLEINPUT) && _midiinEnabled;
+      return preferences.getBool(PREF_IO_MIDI_ENABLEINPUT);
       }
 
 //---------------------------------------------------------
@@ -3160,7 +3195,7 @@ void MuseScore::midiNoteReceived(int channel, int pitch, int velo)
       static int iterDrums = 0;
       static int activeDrums = 0;
 
-      if (!midiinEnabled())
+      if (!isMidiInEnabled())
             return;
 
 // qDebug("midiNoteReceived %d %d %d", channel, pitch, velo);
@@ -3232,7 +3267,7 @@ void MuseScore::midiNoteReceived(int channel, int pitch, int velo)
 
 void MuseScore::midiCtrlReceived(int controller, int value)
       {
-      if (!midiinEnabled())
+      if (!isMidiInEnabled())
             return;
       if (_midiRecordId != -1) {
             preferences.updateMidiRemote(_midiRecordId, MIDI_REMOTE_TYPE_CTRL, controller);
@@ -3491,7 +3526,7 @@ static void loadScores(const QStringList& argv)
                                     score->setName(mscore->createDefaultName());
                                     // TODO score->setPageFormat(*MScore::defaultStyle().pageFormat());
                                     score->doLayout();
-                                    score->setCreated(true);
+                                    score->setStartedEmpty(true);
                                     }
                               if (score == 0) {
                                     score = mscore->readScore(":/data/My_First_Score.mscx");
@@ -3502,7 +3537,7 @@ static void loadScores(const QStringList& argv)
                                           score->setName(mscore->createDefaultName());
                                           // TODO score->setPageFormat(*MScore::defaultStyle().pageFormat());
                                           score->doLayout();
-                                          score->setCreated(true);
+                                          score->setStartedEmpty(true);
                                           }
                                     }
                               if (score)
@@ -4237,10 +4272,13 @@ void MuseScore::inputMethodVisibleChanged()
 //   showModeText
 //---------------------------------------------------------
 
-void MuseScore::showModeText(const QString& s)
+void MuseScore::showModeText(const QString& s, bool informScreenReader)
       {
+      if (s == _modeText->text())
+            return;
+      if (informScreenReader && cs)
+            cs->setAccessibleMessage(s);
       _modeText->setText(s);
-      _modeText->show();
       }
 
 //---------------------------------------------------------
@@ -4336,7 +4374,7 @@ void MuseScore::changeState(ScoreState val)
 
       transportTools->setEnabled(enable && !noSeq && seq && seq->isRunning());
       cpitchTools->setEnabled(enable);
-      mag->setEnabled(enable);
+      zoomBox->setEnabled(enable);
       entryTools->setEnabled(enable);
 
       if (_sstate == STATE_FOTO)
@@ -4354,7 +4392,7 @@ void MuseScore::changeState(ScoreState val)
                   showPianoKeyboard(false);
                   break;
             case STATE_NORMAL:
-                  _modeText->hide();
+                  showModeText(tr("Normal mode"));;
                   break;
             case STATE_NOTE_ENTRY:
                   if (cv && !cv->noteEntryMode())
@@ -4396,6 +4434,16 @@ void MuseScore::changeState(ScoreState val)
                   {
                   if (getAction("note-input-repitch")->isChecked())
                         cs->setNoteEntryMethod(NoteEntryMethod::REPITCH);
+                  else if (getAction("note-input-rhythm")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::RHYTHM);
+                  else if (getAction("note-input-realtime-auto")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::REALTIME_AUTO);
+                  else if (getAction("note-input-realtime-manual")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::REALTIME_MANUAL);
+                  else if (getAction("note-input-timewise")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::TIMEWISE);
+                  else
+                        cs->setNoteEntryMethod(NoteEntryMethod::STEPTIME);
                   showModeText(tr("Drumset input mode"));
                   InputState& is = cs->inputState();
                   showDrumTools(is.drumset(), cs->staff(is.track() / VOICES));
@@ -4404,6 +4452,18 @@ void MuseScore::changeState(ScoreState val)
                   }
                   break;
             case STATE_NOTE_ENTRY_STAFF_TAB:
+                  if (getAction("note-input-repitch")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::REPITCH);
+                  else if (getAction("note-input-rhythm")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::RHYTHM);
+                  else if (getAction("note-input-realtime-auto")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::REALTIME_AUTO);
+                  else if (getAction("note-input-realtime-manual")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::REALTIME_MANUAL);
+                  else if (getAction("note-input-timewise")->isChecked())
+                        cs->setNoteEntryMethod(NoteEntryMethod::TIMEWISE);
+                  else
+                        cs->setNoteEntryMethod(NoteEntryMethod::STEPTIME);
                   showModeText(tr("TAB input mode"));
                   break;
             case STATE_EDIT:
@@ -4419,7 +4479,7 @@ void MuseScore::changeState(ScoreState val)
                   showModeText(tr("Chord symbol/figured bass edit mode"));
                   break;
             case STATE_PLAY:
-                  showModeText(tr("Play"));
+                  showModeText(tr("Play"), false); // don't talk over playback
                   break;
             case STATE_FOTO:
                   showModeText(tr("Image capture mode"));
@@ -4701,7 +4761,6 @@ void MuseScore::play(Element* e) const
             seq->startNoteTimer(MScore::defaultPlayDuration);
             }
       else if (e->isHarmony()
-               && preferences.getBool(PREF_SCORE_HARMONY_PLAY)
                && preferences.getBool(PREF_SCORE_HARMONY_PLAY_ONEDIT)) {
             seq->stopNotes();
             Harmony* h = toHarmony(e);
@@ -4841,64 +4900,85 @@ void MuseScore::dirtyChanged(Score* s)
       }
 
 //---------------------------------------------------------
-//   magChanged
+//   zoomBoxChanged
+//    Called when the zoom-box value has changed; do not call directly.
 //---------------------------------------------------------
 
-void MuseScore::magChanged(MagIdx idx)
+void MuseScore::zoomBoxChanged(const ZoomIndex index, const qreal logicalLevel)
       {
-      if (cv)
-            cv->setMag(idx, mag->getLMag(cv));
+      setZoom(index, logicalLevel);
       }
 
 //---------------------------------------------------------
-//   incMag
+//   setZoom
+//    Sets the zoom type and the logical free-zoom level.
+//    logicalFreeZoomLevel is optional and may be omitted unless index is ZoomIndex::ZOOM_FREE.
 //---------------------------------------------------------
 
-void MuseScore::incMag()
+void MuseScore::setZoom(const ZoomIndex index, const qreal logicalFreeZoomLevel/* = 0.0*/)
+      {
+      zoomAndSavePrevious([=]() { cv->setLogicalZoom(index, cv->calculateLogicalZoomLevel(index, logicalFreeZoomLevel)); });
+      }
+
+//---------------------------------------------------------
+//   setZoomWithToggle
+//    Sets the specified zoom type, or toggles back to the previous zoom state if the zoom type is already the specified one.
+//---------------------------------------------------------
+
+void MuseScore::setZoomWithToggle(const ZoomIndex index)
       {
       if (cv) {
-            qreal _mag = cv->lmag() * SCALE_STEP;
-            if (_mag > SCALE_MAX)
-                  _mag = SCALE_MAX;
-            cv->setMag(MagIdx::MAG_FREE, _mag);
-            setMag(_mag);
+            const ZoomIndex currentZoomIndex = cv->zoomIndex();
+            if (currentZoomIndex != index) {
+                  // The current zoom type isn't the specified one, so just set it to that.
+                  setZoom(index);
+                  }
+            else {
+                  // The current zoom type is already the specified one, so toggle back to the previous zoom state.
+                  setZoom(cv->previousZoomIndex(), cv->previousLogicalZoomLevel());
+                  }
             }
       }
 
 //---------------------------------------------------------
-//   decMag
+//   zoomBySteps
+//    Zooms in or out by the specified number of keyboard-based zoom steps (positive to zoom in, negative to zoom out).
 //---------------------------------------------------------
 
-void MuseScore::decMag()
+void MuseScore::zoomBySteps(const qreal numSteps)
+      {
+      zoomAndSavePrevious([=]() { cv->zoomBySteps(numSteps); });
+      }
+
+//---------------------------------------------------------
+//   zoomAndSavePrevious
+//    Calls the specified zoom function and also saves the previous zoom state if it has changed by the zoom function.
+//---------------------------------------------------------
+
+void MuseScore::zoomAndSavePrevious(const std::function<void(void)>& zoomFunction)
       {
       if (cv) {
-            qreal _mag = cv->lmag() / SCALE_STEP;
-            if (_mag < SCALE_MIN)
-                  _mag = SCALE_MIN;
-            cv->setMag(MagIdx::MAG_FREE, _mag);
-            setMag(_mag);
+            // Make a copy of the current zoom state before it changes.
+            const auto previousLogicalZoom = cv->logicalZoom();
+
+            // Zoom!
+            zoomFunction();
+
+            // Save the previous zoom state, but only if the zoom state has actually changed.
+            if (cv->logicalZoom() != previousLogicalZoom)
+                  cv->setPreviousLogicalZoom(previousLogicalZoom);
             }
       }
 
 //---------------------------------------------------------
-//   getMag
-//    return physical scale
+//   updateZoomBox
+//    Public function called by the score view to update the zoom box after the actual zoom type and/or level have changed.
 //---------------------------------------------------------
 
-double MuseScore::getMag(ScoreView* canvas) const
+void MuseScore::updateZoomBox(const ZoomIndex index, const qreal logicalLevel)
       {
-      return mag->getMag(canvas);
-      }
-
-//---------------------------------------------------------
-//   setMag
-//    set logical scale
-//---------------------------------------------------------
-
-void MuseScore::setMag(double d)
-      {
-      mag->setMag(d);
-      mag->setMagIdx(MagIdx::MAG_FREE);
+      const QSignalBlocker blocker(zoomBox);
+      zoomBox->setLogicalZoom(index, logicalLevel);
       }
 
 //---------------------------------------------------------
@@ -5064,10 +5144,10 @@ void MuseScore::writeSessionFile(bool cleanExit)
                   xml.stag("ScoreView");
                   xml.tag("tab", tab);    // 0 instead of "tab" does not work
                   xml.tag("idx", i);
-                  if (v->magIdx() == MagIdx::MAG_FREE)
-                        xml.tag("mag", v->lmag());
+                  if (v->zoomIndex() == ZoomIndex::ZOOM_FREE)
+                        xml.tag("mag", v->logicalZoomLevel());
                   else
-                        xml.tag("magIdx", int(v->magIdx()));
+                        xml.tag("magIdx", int(v->zoomIndex()));
                   xml.tag("x",   v->xoffset() / DPMM);
                   xml.tag("y",   v->yoffset() / DPMM);
                   xml.etag();
@@ -5084,10 +5164,10 @@ void MuseScore::writeSessionFile(bool cleanExit)
                         xml.stag("ScoreView");
                         xml.tag("tab", 1);
                         xml.tag("idx", i);
-                        if (v->magIdx() == MagIdx::MAG_FREE)
-                              xml.tag("mag", v->lmag());
+                        if (v->zoomIndex() == ZoomIndex::ZOOM_FREE)
+                              xml.tag("mag", v->logicalZoomLevel());
                         else
-                              xml.tag("magIdx", int(v->magIdx()));
+                              xml.tag("magIdx", int(v->zoomIndex()));
                         xml.tag("x",   v->xoffset() / DPMM);
                         xml.tag("y",   v->yoffset() / DPMM);
                         xml.etag();
@@ -5267,12 +5347,12 @@ bool MuseScore::restoreSession(bool always)
                                     }
                               }
                         else if (tag == "ScoreView") {
-                              qreal x       = .0;
-                              qreal y       = .0;
-                              qreal vmag    = 1.0;
-                              MagIdx magIdx = MagIdx::MAG_FREE;
-                              int tab3      = 0;
-                              int idx1      = 0;
+                              qreal x                = 0.0;
+                              qreal y                = 0.0;
+                              qreal logicalZoomLevel = 1.0;
+                              ZoomIndex zoomIndex    = ZoomIndex::ZOOM_FREE;
+                              int tab3               = 0;
+                              int idx1               = 0;
                               while (e.readNextStartElement()) {
                                     const QStringRef& t(e.name());
                                     if (t == "tab")
@@ -5280,9 +5360,15 @@ bool MuseScore::restoreSession(bool always)
                                     else if (t == "idx")
                                           idx1 = e.readInt();
                                     else if (t == "mag")
-                                          vmag = e.readDouble();
-                                    else if (t == "magIdx")
-                                          magIdx = MagIdx(e.readInt());
+                                          logicalZoomLevel = e.readDouble();
+                                    else if (t == "magIdx") {
+                                          zoomIndex = ZoomIndex(e.readInt());
+
+                                          // The zoom level isn't saved along with the index, so reconstruct it if possible.
+                                          const auto i = std::find(zoomEntries.cbegin(), zoomEntries.cend(), zoomIndex);
+                                          if ((i != zoomEntries.cend()) && i->isNumericPreset())
+                                                logicalZoomLevel = i->level / 100.0;
+                                          }
                                     else if (t == "x")
                                           x = e.readDouble() * DPMM;
                                     else if (t == "y")
@@ -5292,7 +5378,7 @@ bool MuseScore::restoreSession(bool always)
                                           return false;
                                           }
                                     }
-                              (tab3 == 0 ? tab1 : tab2)->initScoreView(idx1, vmag, magIdx, x, y);
+                              (tab3 == 0 ? tab1 : tab2)->initScoreView(idx1, logicalZoomLevel, zoomIndex, x, y);
                               }
                         else if (tag == "tab")
                               tab = e.readInt();
@@ -6218,16 +6304,15 @@ void MuseScore::cmd(QAction* a, const QString& cmd)
 #endif
             }
       else if (cmd == "zoomin")
-            incMag();
+            zoomBySteps(1.0);
       else if (cmd == "zoomout")
-            decMag();
-      else if (cmd == "zoom100") {
-            if (cv)
-                  cv->setMag(MagIdx::MAG_100, 1.0);
-            setMag(1.0);
-            }
+            zoomBySteps(-1.0);
+      else if (cmd == "zoom100")
+            setZoom(ZoomIndex::ZOOM_100);
+      else if (cmd == "zoom-page-width")
+            setZoomWithToggle(ZoomIndex::ZOOM_PAGE_WIDTH);
       else if (cmd == "midi-on")
-            midiinToggled(a->isChecked());
+            enableMidiIn(a->isChecked());
       else if (cmd == "undo")
             undoRedo(true);
       else if (cmd == "redo")
@@ -6329,8 +6414,6 @@ void MuseScore::cmd(QAction* a, const QString& cmd)
             changeScore(-1);
       else if (cmd == "transpose")
             transpose();
-      else if (cmd == "realize-chord-symbols")
-            realizeChordSymbols();
       else if (cmd == "save-style") {
             QString name = getStyleFilename(false);
             if (!name.isEmpty()) {
@@ -6410,6 +6493,18 @@ void MuseScore::cmd(QAction* a, const QString& cmd)
             ;
       else if (cmd == "countin")    // no action
             ;
+      else if (cmd == "playback-speed-increase") {
+            createPlayPanel();
+            playPanel->increaseSpeed();
+            }
+      else if (cmd == "playback-speed-decrease") {
+            createPlayPanel();
+            playPanel->decreaseSpeed();
+            }
+      else if (cmd == "playback-speed-reset") {
+            createPlayPanel();
+            playPanel->resetSpeed();
+            }
       else if (cmd == "lock") {
             if (_sstate == STATE_LOCK)
                   changeState(STATE_NORMAL);
@@ -7297,7 +7392,12 @@ void MuseScore::updateUiStyleAndTheme()
       // set UI Theme
       QApplication::setStyle(QStyleFactory::create("Fusion"));
 
+#if defined(WIN_PORTABLE)
+      QString wd = QDir::cleanPath(QString("%1/../../../Data/%2").arg(QCoreApplication::applicationDirPath()).arg(QCoreApplication::applicationName()));
+#else
       QString wd = QString("%1/%2").arg(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).arg(QCoreApplication::applicationName());
+#endif
+
       // set UI Color Palette
       QPalette p(QApplication::palette());
       QString jsonPaletteFilename = preferences.isThemeDark() ? "palette_dark_fusion.json" : "palette_light_fusion.json";;
@@ -7396,6 +7496,9 @@ MuseScoreApplication* MuseScoreApplication::initApplication(int& argc, char** ar
             appName  = "MuseScore3";
             }
 
+#if defined(WIN_PORTABLE)
+      qputenv("QML_DISABLE_DISK_CACHE", "true");
+#endif
       MuseScoreApplication* app = new MuseScoreApplication(appName2, argc, argv);
       QCoreApplication::setApplicationName(appName);
 
@@ -7801,8 +7904,16 @@ void MuseScore::init(QStringList& argv)
       mscoreGlobalShare = getSharePath();
       iconPath = externalIcons ? mscoreGlobalShare + QString("icons/") :  QString(":/data/icons/");
 
+#if defined(WIN_PORTABLE)
+      if (dataPath.isEmpty()) {
+            dataPath = QDir::cleanPath(QString("%1/../../../Data/settings").arg(QCoreApplication::applicationDirPath()).arg(QCoreApplication::applicationName()));
+            QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dataPath);
+            QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, dataPath);
+            }
+#else
       if (dataPath.isEmpty())
             dataPath = QStandardPaths::writableLocation(QStandardPaths::DataLocation);
+#endif
 
       if (useFactorySettings) {
             if (deletePreferences)
@@ -7882,15 +7993,7 @@ void MuseScore::init(QStringList& argv)
 
       MsSplashScreen* sc = nullptr;
       if (!MScore::noGui && preferences.getBool(PREF_UI_APP_STARTUP_SHOWSPLASHSCREEN)) {
-            QString pictureScaling;
-            if (QGuiApplication::primaryScreen()->devicePixelRatio() >= 2)
-                  pictureScaling = "@2x";
-            QPixmap pm(":/data/splash" + pictureScaling + ".png");
-            sc = new MsSplashScreen(pm);
-            sc->setWindowTitle(QString("MuseScore Startup"));
-#ifdef Q_OS_MAC // to have session dialog on top of splashscreen on mac
-            sc->setWindowFlags(Qt::FramelessWindowHint);
-#endif
+            sc = new MsSplashScreen;
             sc->show();
             qApp->processEvents();
             }

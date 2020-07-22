@@ -2991,6 +2991,7 @@ static void readMeasure(Measure* m, int staffIdx, XmlReader& e)
             else if (tag == "Breath") {
                   Breath* breath = new Breath(score);
                   breath->setTrack(e.track());
+                  breath->setPlacement(Placement::ABOVE);
                   Fraction tick = e.tick();
                   breath->read(e);
                   // older scores placed the breath segment right after the chord to which it applies
@@ -3867,6 +3868,7 @@ static bool readScore(Score* score, XmlReader& e)
                         e.skipCurrentElement();
                   else {
                         e.tracks().clear();
+                        e.clearUserTextStyles();
                         MasterScore* m = score->masterScore();
                         Score* s = new Score(m, MScore::baseStyle());
                         Excerpt* ex = new Excerpt(m);

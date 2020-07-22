@@ -74,6 +74,11 @@ enum class MusicxmlExportBreaks : char {
       ALL, MANUAL, NO
       };
 
+// Default-zoom-type options
+enum class ZoomType : int {
+      PAGE_WIDTH = 0, WHOLE_PAGE, TWO_PAGES, PERCENTAGE
+      };
+
 class PreferenceVisitor;
 
 //---------------------------------------------------------

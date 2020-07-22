@@ -438,6 +438,18 @@ QPointF Chord::stemPosBeam() const
       }
 
 //---------------------------------------------------------
+//   rightEdge
+//---------------------------------------------------------
+
+qreal Chord::rightEdge() const
+      {
+      qreal right = 0.0;
+      for (Note* n : notes())
+            right = qMax(right, x() + n->x() + n->bboxRightPos());
+      return right;
+      }
+
+//---------------------------------------------------------
 //   setTremolo
 //---------------------------------------------------------
 
@@ -1348,14 +1360,10 @@ qreal Chord::defaultStemLength() const
       Spatium progression = score()->styleS(Sid::shortStemProgression);
       qreal shortest      = score()->styleS(Sid::shortestStem).val();
       if (hookIdx) {
-            if (up()) {
-                  if (shortest < 3.0)
-                        shortest = 3.0;
-                  }
-            else {
-                  if (shortest < 3.5)
-                        shortest = 3.5;
-                  }
+            if (up())
+                  shortest = qMax(shortest, small() ? 2.0 : 3.0);
+            else
+                  shortest = qMax(shortest, small() ? 2.25 : 3.5);
             }
 
       qreal normalStemLen = small() ? 2.5 : 3.5;
@@ -1444,11 +1452,15 @@ qreal Chord::minAbsStemLength() const
       if (!_tremolo->twoNotes()) {
             _tremolo->layout(); // guarantee right "height value"
 
-            qreal height;
+            // distance between tremolo stroke(s) and chord
+            // choose the furthest/nearest note to calculate for unbeamed/beamed chords
+            // this is due to special layout mechanisms regarding beamed chords
+            // may be changed if beam layout code is improved/rewritten
+            qreal height = 0.0;
             if (up())
-                  height = upPos() - _tremolo->pos().y();
+                  height = (beam() ? upPos() : downPos()) - _tremolo->pos().y();
             else
-                  height = _tremolo->pos().y() + _tremolo->height() - downPos();
+                  height = _tremolo->pos().y() + _tremolo->height() - (beam() ? downPos() : upPos());
             const bool hasHook = beamLvl && !beam();
             if (hasHook)
                   beamLvl += (up() ? 4 : 2); // reserve more space for stem with both hook and tremolo
@@ -1891,7 +1903,7 @@ void Chord::layoutPitched()
             lhead    = qMax(lhead, -x1);
 
             Accidental* accidental = note->accidental();
-            if (accidental && !note->fixed()) {
+            if (accidental && accidental->addToSkyline() && !note->fixed()) {
                   // convert x position of accidental to segment coordinate system
                   qreal x = accidental->pos().x() + note->pos().x() + chordX;
                   // distance from accidental to note already taken into account

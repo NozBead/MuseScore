@@ -794,6 +794,17 @@ Shortcut Shortcut::_sc[] = {
       {
          MsWidget::SCORE_TAB,
          STATE_NORMAL | STATE_NOTE_ENTRY,
+         "pitch-up-diatonic-alterations",
+         QT_TRANSLATE_NOOP("action","Diatonic Up (Keep Degree Alterations)"),
+         QT_TRANSLATE_NOOP("action","Diatonic pitch up (Keep degree alterations)"),
+         0,
+         Icons::Invalid_ICON,
+         Qt::WindowShortcut,
+         ShortcutFlags::A_CMD
+         },
+      {
+         MsWidget::SCORE_TAB,
+         STATE_NORMAL | STATE_NOTE_ENTRY,
          "pitch-up-octave",
          QT_TRANSLATE_NOOP("action","Up Octave"),
          QT_TRANSLATE_NOOP("action","Pitch up octave"),
@@ -848,6 +859,17 @@ Shortcut Shortcut::_sc[] = {
          "pitch-down-diatonic",
          QT_TRANSLATE_NOOP("action","Diatonic Down"),
          QT_TRANSLATE_NOOP("action","Diatonic pitch down"),
+         0,
+         Icons::Invalid_ICON,
+         Qt::WindowShortcut,
+         ShortcutFlags::A_CMD
+         },
+      {
+         MsWidget::SCORE_TAB,
+         STATE_NORMAL | STATE_NOTE_ENTRY,
+         "pitch-down-diatonic-alterations",
+         QT_TRANSLATE_NOOP("action","Diatonic Down (Keep Degree Alterations)"),
+         QT_TRANSLATE_NOOP("action","Diatonic pitch down (Keep degree alterations)"),
          0,
          Icons::Invalid_ICON,
          Qt::WindowShortcut,
@@ -1013,6 +1035,13 @@ Shortcut Shortcut::_sc[] = {
       {
          MsWidget::SCORE_TAB,
          STATE_NORMAL | STATE_NOTE_ENTRY,
+         "prev-system",
+         QT_TRANSLATE_NOOP("action","Previous System"),
+         QT_TRANSLATE_NOOP("action","Go to previous system")
+         },
+      {
+         MsWidget::SCORE_TAB,
+         STATE_NORMAL | STATE_NOTE_ENTRY,
          "prev-track",
          QT_TRANSLATE_NOOP("action","Previous Staff or Voice"),
          QT_TRANSLATE_NOOP("action","Previous staff or voice")
@@ -1030,6 +1059,27 @@ Shortcut Shortcut::_sc[] = {
          "next-measure",
          QT_TRANSLATE_NOOP("action","Next Measure"),
          QT_TRANSLATE_NOOP("action","Go to next measure or move text right")
+         },
+      {
+         MsWidget::SCORE_TAB,
+         STATE_NORMAL | STATE_NOTE_ENTRY,
+         "next-system",
+         QT_TRANSLATE_NOOP("action","Next System"),
+         QT_TRANSLATE_NOOP("action","Go to next system")
+         },
+      {
+         MsWidget::SCORE_TAB,
+         STATE_NORMAL | STATE_NOTE_ENTRY,
+         "top-staff",
+         QT_TRANSLATE_NOOP("action","Top Staff"),
+         QT_TRANSLATE_NOOP("action","Go to top staff")
+         },
+      {
+         MsWidget::SCORE_TAB,
+         STATE_NORMAL | STATE_NOTE_ENTRY,
+         "empty-trailing-measure",
+         QT_TRANSLATE_NOOP("action","First Empty Trailing Measure"),
+         QT_TRANSLATE_NOOP("action","Go to first empty trailing measure")
          },
       {
          MsWidget::SCORE_TAB,
@@ -2627,6 +2677,13 @@ Shortcut Shortcut::_sc[] = {
          QT_TRANSLATE_NOOP("action","Zoom to 100%")
          },
       {
+         MsWidget::MAIN_WINDOW,
+         STATE_NORMAL | STATE_NOTE_ENTRY | STATE_EDIT | STATE_PLAY,
+         "zoom-page-width",
+         QT_TRANSLATE_NOOP("action","Zoom to Page Width or Previous Magnification Level"),
+         QT_TRANSLATE_NOOP("action","Zoom to page-width / previous magnification level")
+         },
+      {
          MsWidget::SCORE_TAB,
          STATE_NORMAL | STATE_NOTE_ENTRY,
          "mirror-note",
@@ -3032,6 +3089,30 @@ Shortcut Shortcut::_sc[] = {
          Icons::countin_ICON,
          Qt::WindowShortcut,
          ShortcutFlags::A_CHECKABLE
+         },
+      {
+         MsWidget::MAIN_WINDOW,
+         STATE_NORMAL | STATE_NOTE_ENTRY | STATE_PLAY | STATE_EDIT,
+         "playback-speed-increase",
+         QT_TRANSLATE_NOOP("action","Increase Playback Speed"),
+         QT_TRANSLATE_NOOP("action","Increase playback speed"),
+         QT_TRANSLATE_NOOP("action","Increase the playback speed")
+         },
+      {
+         MsWidget::MAIN_WINDOW,
+         STATE_NORMAL | STATE_NOTE_ENTRY | STATE_PLAY | STATE_EDIT,
+         "playback-speed-decrease",
+         QT_TRANSLATE_NOOP("action","Decrease Playback Speed"),
+         QT_TRANSLATE_NOOP("action","Decrease playback speed"),
+         QT_TRANSLATE_NOOP("action","Decrease the playback speed")
+         },
+      {
+         MsWidget::MAIN_WINDOW,
+         STATE_NORMAL | STATE_NOTE_ENTRY | STATE_PLAY | STATE_EDIT,
+         "playback-speed-reset",
+         QT_TRANSLATE_NOOP("action","Reset Playback Speed"),
+         QT_TRANSLATE_NOOP("action","Reset playback speed"),
+         QT_TRANSLATE_NOOP("action","Reset the playback speed to 100%")
          },
       {
          MsWidget::SCORE_TAB,

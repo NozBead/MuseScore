@@ -333,26 +333,16 @@ Rest* Score::setRest(const Fraction& _tick, int track, const Fraction& _l, bool 
                   //
                   // compute list of durations which will fit l
                   //
-                  std::vector<TDuration> dList = toDurationList(f, useDots);
+                  std::vector<TDuration> dList = toRhythmicDurationList(f, true, tick - measure->tick(), sigmap()->timesig(tick).nominal(), measure, useDots ? 1 : 0);
                   if (dList.empty())
                         return 0;
 
                   Rest* rest = 0;
-                  if (((tick - measure->tick()).ticks() % dList[0].ticks().ticks()) == 0) {
-                        for (const TDuration& d : dList) {
-                              rest = addRest(tick, track, d, tuplet);
-                              if (r == 0)
-                                    r = rest;
-                              tick += rest->actualTicks();
-                              }
-                        }
-                  else {
-                        for (size_t i = dList.size(); i > 0; --i) { // loop needs to be in this reverse order
-                              rest = addRest(tick, track, dList[i-1], tuplet);
-                              if (r == 0)
-                                    r = rest;
-                              tick += rest->actualTicks();
-                              }
+                  for (const TDuration& d : dList) {
+                        rest = addRest(tick, track, d, tuplet);
+                        if (r == 0)
+                              r = rest;
+                        tick += rest->actualTicks();
                         }
                   }
             l -= f;
@@ -775,35 +765,56 @@ void Score::cmdAddTimeSig(Measure* fm, int staffIdx, TimeSig* ts, bool local)
             return;
             }
 
+      auto getStaffIdxRange = [this, local, staffIdx](const Score* score) -> std::pair<int /*start*/, int /*end*/> {
+            int startStaffIdx, endStaffIdx;
+            if (local) {
+                  if (score == this) {
+                        startStaffIdx = staffIdx;
+                        endStaffIdx   = startStaffIdx + 1;
+                        }
+                  else {
+                        // TODO: get index for this score
+                        qDebug("cmdAddTimeSig: unable to write local time signature change to linked score");
+                        startStaffIdx = 0;
+                        endStaffIdx   = 0;
+                        }
+                  }
+            else {
+                  startStaffIdx = 0;
+                  endStaffIdx   = score->nstaves();
+                  }
+            return std::make_pair(startStaffIdx, endStaffIdx);
+            };
+
       if (ots && ots->sig() == ns && ots->stretch() == ts->stretch()) {
             //
             // the measure duration does not change,
             // so its ok to just update the time signatures
             //
             TimeSig* nts = staff(staffIdx)->nextTimeSig(tick + Fraction::fromTicks(1));
-            const Fraction lmTick = nts ? nts->segment()->tick() : Fraction(-1,1);
+            const Fraction lmTick = nts ? nts->segment()->tick() : Fraction(-1, 1);
             for (Score* score : scoreList()) {
                   Measure* mf = score->tick2measure(tick);
-                  Measure* lm = (lmTick != Fraction(-1,1)) ? score->tick2measure(lmTick) : nullptr;
+                  Measure* lm = (lmTick != Fraction(-1, 1)) ? score->tick2measure(lmTick) : nullptr;
                   for (Measure* m = mf; m != lm; m = m->nextMeasure()) {
                         bool changeActual = m->ticks() == m->timesig();
                         m->undoChangeProperty(Pid::TIMESIG_NOMINAL, QVariant::fromValue(ns));
                         if (changeActual)
-                              m->undoChangeProperty(Pid::TIMESIG_ACTUAL,  QVariant::fromValue(ns));
+                              m->undoChangeProperty(Pid::TIMESIG_ACTUAL, QVariant::fromValue(ns));
                         }
-                  }
-            int n = nstaves();
-            for (int si = 0; si < n; ++si) {
-                  TimeSig* nsig = toTimeSig(seg->element(si * VOICES));
-                  nsig->undoChangeProperty(Pid::SHOW_COURTESY, ts->showCourtesySig());
-                  nsig->undoChangeProperty(Pid::TIMESIG, QVariant::fromValue(ts->sig()));
-                  nsig->undoChangeProperty(Pid::TIMESIG_TYPE, int(ts->timeSigType()));
-                  nsig->undoChangeProperty(Pid::NUMERATOR_STRING, ts->numeratorString());
-                  nsig->undoChangeProperty(Pid::DENOMINATOR_STRING, ts->denominatorString());
-                  nsig->undoChangeProperty(Pid::TIMESIG_STRETCH, QVariant::fromValue(ts->stretch()));
-                  nsig->undoChangeProperty(Pid::GROUPS,  QVariant::fromValue(ts->groups()));
-                  nsig->setSelected(false);
-                  nsig->setDropTarget(0);
+                  std::pair<int, int> staffIdxRange = getStaffIdxRange(score);
+                  for (int si = staffIdxRange.first; si < staffIdxRange.second; ++si) {
+                        TimeSig* nsig = toTimeSig(seg->element(si * VOICES));
+                        nsig->undoChangeProperty(Pid::SHOW_COURTESY, ts->showCourtesySig());
+                        nsig->undoChangeProperty(Pid::TIMESIG, QVariant::fromValue(ts->sig()));
+                        nsig->undoChangeProperty(Pid::TIMESIG_TYPE, int(ts->timeSigType()));
+                        nsig->undoChangeProperty(Pid::NUMERATOR_STRING, ts->numeratorString());
+                        nsig->undoChangeProperty(Pid::DENOMINATOR_STRING, ts->denominatorString());
+                        nsig->undoChangeProperty(Pid::TIMESIG_STRETCH, QVariant::fromValue(ts->stretch()));
+                        nsig->undoChangeProperty(Pid::GROUPS, QVariant::fromValue(ts->groups()));
+                        nsig->setSelected(false);
+                        nsig->setDropTarget(0);
+                        }
                   }
             }
       else {
@@ -849,25 +860,9 @@ void Score::cmdAddTimeSig(Measure* fm, int staffIdx, TimeSig* ts, bool local)
             std::map<int, TimeSig*> masterTimeSigs;
             for (Score* score : scoreList()) {
                   Measure* nfm = score->tick2measure(tick);
-                  seg   = nfm->undoGetSegment(SegmentType::TimeSig, nfm->tick());
-                  int startStaffIdx, endStaffIdx;
-                  if (local) {
-                        if (score == this) {
-                              startStaffIdx = staffIdx;
-                              endStaffIdx   = startStaffIdx + 1;
-                              }
-                        else {
-                              // TODO: get index for this score
-                              qDebug("cmdAddTimeSig: unable to write local time signature change to linked score");
-                              startStaffIdx = 0;
-                              endStaffIdx   = 0;
-                              }
-                        }
-                  else {
-                        startStaffIdx = 0;
-                        endStaffIdx   = score->nstaves();
-                        }
-                  for (int si = startStaffIdx; si < endStaffIdx; ++si) {
+                  seg = nfm->undoGetSegment(SegmentType::TimeSig, nfm->tick());
+                  std::pair<int, int> staffIdxRange = getStaffIdxRange(score);
+                  for (int si = staffIdxRange.first; si < staffIdxRange.second; ++si) {
                         TimeSig* nsig = toTimeSig(seg->element(si * VOICES));
                         if (nsig == 0) {
                               nsig = new TimeSig(*ts);
@@ -1754,7 +1749,7 @@ void Score::deleteItem(Element* el)
                   Rest* rest = toRest(el);
                   if (rest->tuplet() && rest->tuplet()->elements().empty())
                         undoRemoveElement(rest->tuplet());
-                  if (el->voice() != 0) {
+                  if ((el->voice() != 0) && !rest->tuplet()) {
                         rest->undoChangeProperty(Pid::GAP, true);
                         for (ScoreElement* r : el->linkList()) {
                               Rest* rr = toRest(r);
@@ -2848,19 +2843,31 @@ void Score::cmdEnterRest(const TDuration& d)
             return;
             }
       startCmd();
-      expandVoice();
-      if (_is.cr() == 0) {
+      enterRest(d);
+      endCmd();
+      }
+
+//---------------------------------------------------------
+//   enterRest
+//---------------------------------------------------------
+
+void Score::enterRest(const TDuration& d, InputState* externalInputState)
+      {
+      InputState& is = externalInputState ? (*externalInputState) : _is;
+
+      expandVoice(is.segment(), is.track());
+
+      if (!is.cr()) {
             qDebug("cannot enter rest here");
             return;
             }
 
-      int track = _is.track();
+      const int track = is.track();
       NoteVal nval;
-      setNoteRest(_is.segment(), track, nval, d.fraction(), Direction::AUTO);
-      _is.moveToNextInputPos();
-      if (!noteEntryMode() || usingNoteEntryMethod(NoteEntryMethod::STEPTIME))
-            _is.setRest(false);  // continue with normal note entry
-      endCmd();
+      setNoteRest(is.segment(), track, nval, d.fraction(), Direction::AUTO, /* forceAccidental */ false, /* rhythmic */ false, externalInputState);
+      is.moveToNextInputPos();
+      if (!is.noteEntryMode() || is.usingNoteEntryMethod(NoteEntryMethod::STEPTIME))
+            is.setRest(false);  // continue with normal note entry
       }
 
 //---------------------------------------------------------
@@ -4515,17 +4522,48 @@ void Score::undoAddElement(Element* element)
             return;
             }
 
+      // For linked staves the length of staffList is always > 1 since the list contains the staff itself too!
+      const bool linked = ostaff->staffList().length() > 1;
+
       for (Staff* staff : ostaff->staffList()) {
             Score* score = staff->score();
             int staffIdx = staff->idx();
 
             QList<int> tr;
-            if ((strack & ~3) != staffIdx) // linked staff ?
-                  tr.append(staffIdx * VOICES + (strack % VOICES));
-            else if (staff->score()->excerpt() && strack > -1)
-                  tr = staff->score()->excerpt()->tracks().values(strack);
-            else
-                  tr.append(strack);
+            if (!staff->score()->excerpt()) {
+                  // On masterScore.
+                  int track = staff->idx() * VOICES + (strack % VOICES);
+                  tr.append(track);
+                  }
+            else {
+                  QMultiMap<int, int> mapping = staff->score()->excerpt()->tracks();
+                  if (mapping.isEmpty()) {
+                        // This can happen during reading the score and there is
+                        // no Tracklist tag specified.
+                        // TODO solve this in read301.cpp.
+                        tr.append(strack);
+                        }
+                  else {
+                        for (int track : mapping.values(strack)) {
+                              // linkedPart : linked staves within same part/instrument.
+                              // linkedScore: linked staves over different scores via excerpts.
+                              const bool linkedPart  = linked && (staff != ostaff) && (staff->score() == ostaff->score());
+                              const bool linkedScore = linked && (staff != ostaff) && (staff->score() != ostaff->score());
+                              if (linkedPart && !linkedScore) {
+                                    tr.append(staff->idx() * VOICES + mapping.value(track));
+                                    }
+                              else if (!linkedPart && linkedScore) {
+                                    if ((track >> 2) != staffIdx)
+                                          track += (staffIdx - (track >> 2)) * VOICES;
+                                    tr.append(track);
+                                    }
+                              else {
+                                    tr.append(track);
+                                    }
+                              }
+                        }
+                  }
+
 
             // Some elements in voice 1 of a staff should be copied to every track which has a linked voice in this staff
 
@@ -4548,13 +4586,7 @@ void Score::undoAddElement(Element* element)
                   tr.append(staffIdx * VOICES);
                   }
 
-            int it = 0;
             for (int ntrack : tr) {
-                  if ((ntrack & ~3) != staffIdx * VOICES) {
-                        it++;
-                        continue;
-                        }
-
                   Element* ne;
                   if (staff == ostaff)
                         ne = element;
@@ -4579,6 +4611,14 @@ void Score::undoAddElement(Element* element)
                         ne->setScore(score);
                         ne->setSelected(false);
                         ne->setTrack(staffIdx * VOICES + element->voice());
+
+                        if (ne->isFretDiagram()) {
+                              FretDiagram* fd = toFretDiagram(ne);
+                              Harmony* fdHarmony = fd->harmony();
+                              fdHarmony->setScore(score);
+                              fdHarmony->setSelected(false);
+                              fdHarmony->setTrack(staffIdx * VOICES + element->voice());
+                              }
                         }
 
                   if (element->isArticulation()) {
@@ -4664,8 +4704,7 @@ void Score::undoAddElement(Element* element)
                         if (ne->isHarmony()) {
                               for (Element* segel : segment->annotations()) {
                                     if (segel && segel->isFretDiagram() && segel->track() == ntrack) {
-                                          ne->setTrack(segel->track());
-                                          ne->setParent(segel);
+                                          segel->add(ne);
                                           break;
                                           }
                                     }
@@ -4856,7 +4895,6 @@ void Score::undoAddElement(Element* element)
                         }
                   else
                         qWarning("undoAddElement: unhandled: <%s>", element->name());
-                  it++;
                   }
             }
       }
@@ -4887,19 +4925,46 @@ void Score::undoAddCR(ChordRest* cr, Measure* measure, const Fraction& tick)
 
       SegmentType segmentType = SegmentType::ChordRest;
 
-      Tuplet* t = cr->tuplet();
+      Tuplet* crTuplet = cr->tuplet();
+
+      // For linked staves the length of staffList is always > 1 since the list contains the staff itself too!
+      const bool linked = ostaff->staffList().length() > 1;
 
       for (const Staff* staff : ostaff->staffList()) {
             QList<int> tracks;
-            int staffIdx = staff->idx();
-            if ((strack & ~3) != staffIdx) // linked staff ?
-                  tracks.append(staffIdx * VOICES + (strack % VOICES));
-            else if (staff->score()->excerpt() && !staff->score()->excerpt()->tracks().isEmpty())
-                  tracks = staff->score()->excerpt()->tracks().values(strack);
-            else if (!staff->score()->excerpt())
-                  tracks.append(staffIdx * VOICES + (strack % VOICES));
-            else
-                  tracks.append(staffIdx * VOICES + cr->voice());
+            if (!staff->score()->excerpt()) {
+                  // On masterScore.
+                  int track = staff->idx() * VOICES + (strack % VOICES);
+                  tracks.append(track);
+                  }
+            else {
+                  QMultiMap<int, int> mapping = staff->score()->excerpt()->tracks();
+                  if (mapping.isEmpty()) {
+                        // This can happen during reading the score and there is
+                        // no Tracklist tag specified.
+                        // TODO solve this in read301.cpp.
+                        tracks.append(strack);
+                        }
+                  else {
+                        // linkedPart : linked staves within same part/instrument.
+                        // linkedScore: linked staves over different scores via excerpts.
+                        const bool linkedPart  = linked && (staff != ostaff) && (staff->score() == ostaff->score());
+                        const bool linkedScore = linked && (staff != ostaff) && (staff->score() != ostaff->score());
+                        for (int track : mapping.values(strack)) {
+                              if (linkedPart && !linkedScore) {
+                                    tracks.append(staff->idx() * VOICES + mapping.value(track));
+                                    }
+                              else if (!linkedPart && linkedScore) {
+                                    if ((track >> 2) != staff->idx())
+                                          track += (staff->idx() - (track >> 2)) * VOICES;
+                                    tracks.append(track);
+                                    }
+                              else {
+                                    tracks.append(track);
+                                    }
+                              }
+                        }
+                  }
 
             for (int ntrack : tracks) {
                   if (ntrack < staff->part()->startTrack() || ntrack >= staff->part()->endTrack())
@@ -4932,73 +4997,41 @@ void Score::undoAddCR(ChordRest* cr, Measure* measure, const Fraction& tick)
                               }
                         }
 #endif
-                  if (t) {
-                        if (staff != ostaff) {
-                              Tuplet* nt = 0;
-                              if (t->elements().empty() || t->elements().front() == cr) {
-                                    for (ScoreElement* e : t->linkList()) {
-                                          Tuplet* nt1 = toTuplet(e);
-                                          if (nt1 == t)
-                                                continue;
-                                          if (nt1->score() == score && nt1->track() == newcr->track()) {
-                                                nt = nt1;
-                                                break;
-                                                }
+                  if (crTuplet && staff != ostaff) {
+                        // In case of nested tuplets, get the parent tuplet.
+                        Tuplet* parTuplet { nullptr };
+                        if (crTuplet->tuplet()) {
+                              // Look for a tuplet, linked to the parent tuplet of crTuplet but
+                              // which is on the same staff as the new ChordRest.
+                              for (auto e : crTuplet->tuplet()->linkList()) {
+                                    Tuplet* t = toTuplet(e);
+                                    if (t->staff() == newcr->staff()) {
+                                          parTuplet = t;
+                                          break;
                                           }
-                                    if (!nt) {
-                                          nt = toTuplet(t->linkedClone());
-                                          nt->setTuplet(0);
-                                          nt->setScore(score);
-                                          nt->setTrack(newcr->track());
-                                          }
-
-                                    Tuplet* t2  = t;
-                                    Tuplet* nt2 = nt;
-                                    while (t2->tuplet()) {
-                                          Tuplet* t3  = t2->tuplet();
-                                          Tuplet* nt3 = 0;
-
-                                          for (auto i : t3->linkList()) {
-                                                Tuplet* tt = toTuplet(i);
-                                                if (tt != t3 && tt->score() == score && tt->track() == t2->track()) {
-                                                      nt3 = tt;
-                                                      break;
-                                                      }
-                                                }
-                                          if (nt3 == 0) {
-                                                nt3 = toTuplet(t3->linkedClone());
-                                                nt3->setScore(score);
-                                                nt3->setTrack(nt2->track());
-                                                }
-                                          nt3->add(nt2);
-                                          nt2->setTuplet(nt3);
-
-                                          t2 = t3;
-                                          nt2 = nt3;
-                                          }
-
-                                    }
-                              else {
-                                    const LinkedElements* le = t->links();
-                                    // search the linked tuplet
-                                    if (le) {
-                                          for (ScoreElement* ee : *le) {
-                                                Element* e = static_cast<Element*>(ee);
-                                                if (e->score() == score && e->track() == ntrack) {
-                                                      nt = toTuplet(e);
-                                                      break;
-                                                      }
-                                                }
-                                          }
-                                    if (nt == 0)
-                                          qWarning("linked tuplet not found");
-                                    }
-
-                              if (nt) {
-                                    newcr->setTuplet(nt);
-                                    nt->setParent(newcr->measure());
                                     }
                               }
+
+                        // Look for a tuplet linked to crTuplet but is on the same staff as
+                        // the new ChordRest. Create a new tuplet if not found.
+                        Tuplet* newTuplet { nullptr };
+                        for (auto e : crTuplet->linkList()) {
+                              Tuplet* t = toTuplet(e);
+                              if (t->staff() == newcr->staff()) {
+                                    newTuplet = t;
+                                    break;
+                                    }
+                              }
+
+                        if (!newTuplet) {
+                              newTuplet = toTuplet(crTuplet->linkedClone());
+                              newTuplet->setTuplet(parTuplet);
+                              newTuplet->setScore(score);
+                              newTuplet->setTrack(newcr->track());
+                              newTuplet->setParent(m);
+                              }
+
+                        newcr->setTuplet(newTuplet);
                         }
 
                   if (newcr->isRest() && (toRest(newcr)->isGap()) && !(toRest(newcr)->track() % VOICES))

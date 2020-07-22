@@ -21,6 +21,7 @@
 #include "libmscore/mscoreview.h"
 #include "libmscore/pos.h"
 #include "libmscore/harmony.h"
+#include "mscore/zoombox.h"
 
 namespace Ms {
 
@@ -60,35 +61,41 @@ class Articulation;
 
 enum class Grip : int;
 enum class POS : char;
-enum class MagIdx : char;
+enum class ZoomIndex : char;
 
 //---------------------------------------------------------
-//   ViewState
+//   SmoothPanSettings
 //---------------------------------------------------------
 
 struct SmoothPanSettings {
-      double controlModifierBase          { 1 };
-      double controlModifierSteps         { 0.01 };
-      double minContinuousModifier        { 0.2 };
-      double maxContinuousModifier        { 5 };
+      // these are all actually loaded from the loadFromPreferences fuction so don't change these to change the default values,
+      // change the corresponding preferences
+      double controlModifierBase          { 1 };      // initial speed modifier
+      double controlModifierSteps         { 0.01 };   // modification steps for the modifier
+      double minContinuousModifier        { 0.2 };    // minimum speed, 0.2 was chosen instead of 0 to remove stuttering
+      double maxContinuousModifier        { 5 };      // maximum speed
 
-      // Changing the distance will change the sensitivity/accuracy/jitter of the algorithm. Larger absolut values are generally smoother.
-      double leftDistance                 { -250 };
+      // Changing the distance will change the sensitivity/accuracy/jitter of the algorithm. Larger absolute values are generally smoother.
+      double leftDistance                 { -250 };   // decelarate
       double leftDistance1                { -125 };
       double leftDistance2                { -50 };
       double leftDistance3                { -25 };
-      double rightDistance                { 500 };
+      double rightDistance                { 500 };    // accelerate
       double rightDistance1               { 250 };
       double rightDistance2               { 125 };
       double rightDistance3               { 50 };
-      double leftMod1                     { 0.8 };
-      double leftMod2                     { 0.9 };
+                                                      // used to smoothly go back to normal speed when the playback cursor is getting closer
+      double leftMod1                     { 0.8 };    // minimum speed at the first level
+      double leftMod2                     { 0.9 };    // etc
       double leftMod3                     { 0.95 };
-      double rightMod1                    { 1.2 };
-      double rightMod2                    { 1.1 };
+                                                      // used to smoothly go back to normal speed when the control cursor is getting closer to the playback cursor
+      double rightMod1                    { 1.2 };    // maximum speed at the first level
+      double rightMod2                    { 1.1 };    // etc
       double rightMod3                    { 1.05 };
 
-      double controlCursorScreenPos       { 0.3 };
+      double controlCursorScreenPos       { 0.3 };  
+      bool teleportLeftEnabled            { true };
+      bool teleportRightEnabled           { false };
 
       bool advancedWeighting              { false };  // enables the 'smart weight'
       double normalWeight                 { 1 };
@@ -147,7 +154,8 @@ class ScoreView : public QWidget, public MuseScoreView {
       QVector<QLineF> m_dropAnchorLines;
 
       QTransform _matrix, imatrix;
-      MagIdx _magIdx;
+      ZoomIndex _zoomIndex;
+      ZoomState _previousLogicalZoom { ZoomIndex::ZOOM_PAGE_WIDTH, 0.0 }; // for zoom-level toggling
 
       QFocusFrame* focusFrame;
 
@@ -356,6 +364,7 @@ class ScoreView : public QWidget, public MuseScoreView {
 
       void moveCursor(const Fraction& tick);
       void moveControlCursor(const Fraction& tick);
+      bool isCursorDistanceReasonable();
       Fraction cursorTick() const;
       void setCursorOn(bool);
       void setBackground(QPixmap*);
@@ -367,14 +376,17 @@ class ScoreView : public QWidget, public MuseScoreView {
       virtual void setScore(Score* s);
       virtual void removeScore()  { _score = 0; }
 
-      void setMag(qreal m);
+      void setPhysicalZoomLevel(qreal logicalLevel);
+
       bool navigatorVisible() const;
       void cmd(const QAction*);
       void cmd(const char*);
 
       void startUndoRedo(bool);
-      void zoomStep(qreal step, const QPoint& pos);
-      void zoom(qreal _mag, const QPointF& pos);
+      void zoomBySteps(qreal numSteps, bool usingMouse = false, const QPointF& pos = QPointF());
+      void setLogicalZoom(ZoomIndex index, qreal logicalLevel, const QPointF& pos = QPointF());
+      qreal calculateLogicalZoomLevel(const ZoomIndex index, const qreal logicalFreeZoomLevel = 0.0) const;
+      qreal calculatePhysicalZoomLevel(const ZoomIndex index, const qreal logicalFreeZoomLevel = 0.0) const;
       void contextPopup(QContextMenuEvent* ev);
       bool editKeyLyrics();
       bool editKeySticking();
@@ -403,10 +415,18 @@ class ScoreView : public QWidget, public MuseScoreView {
       virtual void setDropTarget(const Element*) override;
       void setDropAnchorLines(const QVector<QLineF> &anchorList);
       const QTransform& matrix() const  { return _matrix; }
-      qreal mag() const;
-      qreal lmag() const;
-      MagIdx magIdx() const             { return _magIdx; }
-      void setMag(MagIdx idx, double mag);
+
+      ZoomIndex zoomIndex() const { return _zoomIndex; }
+      qreal logicalZoomLevel() const;
+      qreal physicalZoomLevel() const;
+      ZoomState logicalZoom() const { return { _zoomIndex, logicalZoomLevel() }; }
+      void setLogicalZoom(const ZoomState& logicalZoom) { setLogicalZoom(logicalZoom.index, logicalZoom.level); }
+
+      ZoomIndex previousZoomIndex() const { return _previousLogicalZoom.index; }
+      qreal previousLogicalZoomLevel() const { return _previousLogicalZoom.level; }
+      const ZoomState& previousLogicalZoom() const { return _previousLogicalZoom; }
+      void setPreviousLogicalZoom(ZoomState previousLogicalZoom) { _previousLogicalZoom = std::move(previousLogicalZoom); }
+
       qreal xoffset() const;
       qreal yoffset() const;
       void setOffset(qreal x, qreal y);

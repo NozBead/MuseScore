@@ -109,19 +109,22 @@ void Rest::draw(QPainter* painter) const
             // draw number
             int n = measure()->mmRestCount();
             std::vector<SymId>&& s = toTimeSigString(QString("%1").arg(n));
+            QRectF numberBox = symBbox(s);
             qreal y = _mmRestNumberPos * spatium() - staff()->height() * .5;
-            qreal x = (_mmWidth - symBbox(s).width()) * .5;
+            qreal x = (_mmWidth - numberBox.width()) * .5;
             drawSymbols(s, painter, QPointF(x, y));
 
             // draw horizontal line
-            qreal pw = _spatium * .7;
+            qreal pw = _spatium * .7; // line width
             QPen pen(painter->pen());
             pen.setWidthF(pw);
             painter->setPen(pen);
-            qreal x1 = pw * .5;
+            qreal x1 = pw * .5; // half of the line width
             qreal x2 = _mmWidth - x1;
-            if (_mmRestNumberPos > 0.7 && _mmRestNumberPos < 3.3) { // hack for when number encounters horizontal line
-                  qreal gapDistance = symBbox(s).width() * .5 + _spatium;
+
+            // avoid painting the line when it collides with the number.
+            if ((y + (numberBox.height() * .5 )) > -x1  && (y - (numberBox.height() * .5 )) < x1) {
+                  qreal gapDistance = numberBox.width() * .5 + _spatium;
                   qreal midpoint = (x1 + x2) * .5;
                   painter->drawLine(QLineF(x1, 0.0, midpoint - gapDistance, 0.0));
                   painter->drawLine(QLineF(midpoint + gapDistance, 0.0, x2, 0.0));
@@ -348,8 +351,25 @@ void Rest::layoutMMRest(qreal val)
       bbox().setRect(0.0, -_spatium, _mmWidth, _spatium * 2);
 
       // text
-//      qreal y  = -_spatium * 2.5 - staff()->height() *.5;
-//      addbbox(QRectF(0, y, w, _spatium * 2));         // approximation
+      addbbox(mmRestNumberRect());
+}
+
+//---------------------------------------------------------
+//   mmRestNumberRect
+///   returns the mmrest number's bounding rectangle
+//---------------------------------------------------------
+
+QRectF Rest::mmRestNumberRect() const
+      {
+      int n = measure()->mmRestCount();
+      std::vector<SymId>&& s = toTimeSigString(QString("%1").arg(n));
+
+      QRectF r = symBbox(s);
+      qreal y = _mmRestNumberPos * spatium() - staff()->height() * .5;
+      qreal x = (_mmWidth - r.width()) * .5;
+
+      r.translate(QPointF(x, y));
+      return r;
       }
 
 //---------------------------------------------------------
@@ -512,7 +532,7 @@ int Rest::computeLineOffset(int lines)
                         }
                   }
             }
-#if 0
+
       if (offsetVoices && staff()->mergeMatchingRests()) {
             // automatically merge matching rests in voices 1 & 2 if nothing in any other voice
             // this is not always the right thing to do do, but is useful in choral music
@@ -529,7 +549,7 @@ int Rest::computeLineOffset(int lines)
                         // try to find match in other voice (1 or 2)
                         if (e && e->type() == ElementType::REST) {
                               Rest* r = toRest(e);
-                              if (r->globalDuration() == globalDuration()) {
+                              if (r->globalTicks() == globalTicks()) {
                                     matchFound = true;
                                     continue;
                                     }
@@ -548,7 +568,6 @@ int Rest::computeLineOffset(int lines)
             if (matchFound && nothingElse)
                   offsetVoices = false;
             }
-#endif
 
       int lineOffset    = 0;
       int assumedCenter = 4;
@@ -558,47 +577,103 @@ int Rest::computeLineOffset(int lines)
       if (offsetVoices) {
             // move rests in a multi voice context
             bool up = (voice() == 0) || (voice() == 2);     // TODO: use style values
+            
+            // Calculate extra offset to move rests above the highest resp. below the lowest note
+            // of this segment (for measure rests, of the whole measure) in all opposite voices. 
+            // Ignore stems and articulations, because which multi-voice they are at the opposite end.
+            int upOffset = up ? 1 : 0;
+            int line = up ? 10 : -10;
+
+            // For compatibility reasons apply automatic collision avoidance only if y-offset is unchanged 
+            if (qFuzzyIsNull(offset().y())) {
+                  int firstTrack = staffIdx() * 4;
+                  int extraOffsetForFewLines = lines < 5 ? 2 : 0;
+                  bool isMeasureRest = durationType().type() == TDuration::DurationType::V_MEASURE;
+                  Segment* seg = isMeasureRest ? measure()->first() : s;
+                  while (seg) {
+                        for (const int& track : { firstTrack + upOffset, firstTrack + 2 + upOffset }) {
+                              Element* e = seg->element(track);
+                              if (e && e->isChord()) {
+                                    Chord* chord = toChord(e);
+                                    StaffGroup staffGroup = staff()->staffType(chord->tick())->group();
+                                    for (Note* note : chord->notes()) {
+                                          int nline = staffGroup == StaffGroup::TAB
+                                                ? note->string() * 2
+                                                : note->line();
+                                          nline = nline - centerDiff;
+                                          if (up && nline <= line) {
+                                                line = nline - extraOffsetForFewLines; 
+                                                if (note->accidentalType() != AccidentalType::NONE)
+                                                      line--;
+                                                }
+                                          else if (!up && nline >= line) {
+                                                line = nline + extraOffsetForFewLines;
+                                                if (note->accidentalType() != AccidentalType::NONE)
+                                                      line++;
+                                                }
+                                          }
+                                    }
+                              }
+                        seg = isMeasureRest ? seg->next() : nullptr;
+                        }
+                  }
+
             switch(durationType().type()) {
                   case TDuration::DurationType::V_LONG:
                         lineOffset = up ? -3 : 5;
+                        lineOffset += up ? (line < 5 ? line - 5 : 0) : (line > 5 ? line - 5 : 0);
                         break;
                   case TDuration::DurationType::V_BREVE:
                         lineOffset = up ? -3 : 5;
+                        lineOffset += up ? (line < 3 ? line - 3 : 0) : (line > 5 ? line - 5 : 0);
                         break;
                   case TDuration::DurationType::V_MEASURE:
-                        if (ticks() >= Fraction(2, 1))   // breve symbol
+                        if (ticks() >= Fraction(2, 1)) {  // breve symbol
                               lineOffset = up ? -3 : 5;
-                        else
+                              lineOffset += up ? (line < 3 ? line - 3 : 0) : (line > 5 ? line - 4 : 0);
+                              }
+                        else {
                               lineOffset = up ? -4 : 6;     // whole symbol
+                              lineOffset += up ? (line < 3 ? line - 2 : 0) : (line > 6 ? line - 5 : 0);
+                              }
                         break;
                   case TDuration::DurationType::V_WHOLE:
                         lineOffset = up ? -4 : 6;
+                        lineOffset += up ? (line < 3 ? line - 2 : 0) : (line > 6 ? line - 5 : 0);
                         break;
                   case TDuration::DurationType::V_HALF:
                         lineOffset = up ? -4 : 4;
+                        lineOffset += up ? (line < 2 ? line - 3 : 0) : (line > 5 ? line - 4 : 0);
                         break;
                   case TDuration::DurationType::V_QUARTER:
                         lineOffset = up ? -4 : 4;
+                        lineOffset += up ? (line < 5 ? line - 4 : 0) : (line > 3 ? line - 3 : 0);
                         break;
                   case TDuration::DurationType::V_EIGHTH:
                         lineOffset = up ? -4 : 4;
+                        lineOffset += up ? (line < 4 ? line - 4 : 0) : (line > 4 ? line - 4 : 0);
                         break;
                   case TDuration::DurationType::V_16TH:
                         lineOffset = up ? -6 : 4;
+                        lineOffset += up ? (line < 4 ? line - 4 : 0) : (line > 4 ? line - 4 : 0);
                         break;
                   case TDuration::DurationType::V_32ND:
                         lineOffset = up ? -6 : 6;
+                        lineOffset += up ? (line < 4 ? line - 4 : 0) : (line > 4 ? line - 4 : 0);
                         break;
                   case TDuration::DurationType::V_64TH:
                         lineOffset = up ? -8 : 6;
+                        lineOffset += up ? (line < 4 ? line - 4 : 0) : (line > 4 ? line - 4 : 0);
                         break;
                   case TDuration::DurationType::V_128TH:
                         lineOffset = up ? -8 : 8;
+                        lineOffset += up ? (line < 4 ? line - 4 : 0) : (line > 4 ? line - 4 : 0);
                         break;
                   case TDuration::DurationType::V_1024TH:
                   case TDuration::DurationType::V_512TH:
                   case TDuration::DurationType::V_256TH:
                         lineOffset = up ? -10 : 6;
+                        lineOffset += up ? (line < 4 ? line - 4 : 0) : (line > 4 ? line - 4 : 0);
                         break;
                   default:
                         break;
@@ -773,6 +848,15 @@ qreal Rest::stemPosX() const
             return bbox().right();
       else
             return bbox().left();
+      }
+
+//---------------------------------------------------------
+//   rightEdge
+//---------------------------------------------------------
+
+qreal Rest::rightEdge() const
+      {
+      return x() + width();
       }
 
 //---------------------------------------------------------
@@ -1072,15 +1156,7 @@ Shape Rest::shape() const
                   qreal _spatium = spatium();
                   shape.add(QRectF(0.0, -_spatium, _mmWidth, 2.0 * _spatium));
 
-                  int n = measure()->mmRestCount();
-                  std::vector<SymId>&& s = toTimeSigString(QString("%1").arg(n));
-                  
-                  QRectF r = symBbox(s);
-                  qreal y = _mmRestNumberPos * spatium() - staff()->height() * .5;
-                  qreal x = .5 * (_mmWidth - r.width());
-
-                  r.translate(QPointF(x, y));
-                  shape.add(r);
+                  shape.add(mmRestNumberRect());
                   }
             else
 #ifndef NDEBUG
@@ -1096,6 +1172,24 @@ Shape Rest::shape() const
                   shape.add(e->shape().translated(e->pos()));
             }
       return shape;
+      }
+
+//---------------------------------------------------------
+//   editDrag
+//---------------------------------------------------------
+
+void Rest::editDrag(EditData& editData)
+      {
+      Segment* seg = segment();
+
+      if (editData.modifiers & Qt::ShiftModifier) {
+            const Spatium deltaSp = Spatium(editData.delta.x() / spatium());
+            seg->undoChangeProperty(Pid::LEADING_SPACE, seg->extraLeadingSpace() + deltaSp);
+            }
+      else {
+            setOffset(offset() + editData.evtDelta);
+            }
+      triggerLayout();
       }
 
 }

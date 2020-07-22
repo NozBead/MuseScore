@@ -18,6 +18,8 @@
 #include "fraction.h"
 #include "scoreElement.h"
 #include "shape.h"
+#include "sig.h"
+#include "sym.h"
 
 namespace Ms {
 
@@ -33,7 +35,6 @@ namespace Ms {
 
 class XmlReader;
 class XmlWriter;
-enum class SymId;
 enum class Pid;
 class StaffType;
 
@@ -267,6 +268,8 @@ class Element : public ScoreElement {
       virtual Fraction rtick() const;
       virtual Fraction playTick() const; ///< Returns the tick at which playback should begin when this element is selected. Defaults to the element's own tick position.
 
+      Fraction beat() const;
+
       bool isNudged() const                       { return !_offset.isNull(); }
 
       virtual const QRectF& bbox() const          { return _bbox;              }
@@ -306,7 +309,7 @@ class Element : public ScoreElement {
       virtual void startDrag(EditData&);
       virtual QRectF drag(EditData&);
       virtual void endDrag(EditData&);
-      /** Returns anchor lines displayed while dragging element in page coordinates. */
+      /** Returns anchor lines displayed while dragging element in canvas coordinates. */
       virtual QVector<QLineF> dragAnchorLines() const       { return QVector<QLineF>(); }
       /**
        * A generic \ref dragAnchorLines() implementation which can be used in
@@ -334,7 +337,7 @@ class Element : public ScoreElement {
       void updateGrips(EditData&) const;
       virtual bool nextGrip(EditData&) const;
       virtual bool prevGrip(EditData&) const;
-      /** Returns anchor lines displayed while dragging element's grip in page coordinates. */
+      /** Returns anchor lines displayed while dragging element's grip in canvas coordinates. */
       virtual QVector<QLineF> gripAnchorLines(Grip) const     { return QVector<QLineF>(); }
 
       virtual EditBehavior normalModeEditBehavior() const { return EditBehavior::SelectOnly; }

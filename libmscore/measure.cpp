@@ -812,8 +812,11 @@ void Measure::add(Element* e)
                   break;
 
             case ElementType::MEASURE_NUMBER:
-                  if (e->staffIdx() < int(_mstaves.size()))
+                  if (e->staffIdx() < int(_mstaves.size())) {
+                        if (e->isStyled(Pid::OFFSET))
+                              e->setOffset(e->propertyDefault(Pid::OFFSET).toPointF());
                         _mstaves[e->staffIdx()]->setNoText(toMeasureNumber(e));
+                        }
                   break;
 
             case ElementType::SPACER:
@@ -1426,7 +1429,10 @@ Element* Measure::drop(EditData& data)
                         firstStaff++;
                         }
                   Selection sel = score()->selection();
-                  score()->undoAddBracket(staff, level, b->bracketType(), sel.staffEnd() - sel.staffStart());
+                  if (sel.isRange())
+                        score()->undoAddBracket(staff, level, b->bracketType(), sel.staffEnd() - sel.staffStart());
+                  else
+                        score()->undoAddBracket(staff, level, b->bracketType(), 1);
                   delete b;
                   }
                   break;
@@ -2166,6 +2172,7 @@ void Measure::readVoice(XmlReader& e, int staffIdx, bool irregular)
             else if (tag == "Breath") {
                   Breath* breath = new Breath(score());
                   breath->setTrack(e.track());
+                  breath->setPlacement(breath->track() & 1 ? Placement::BELOW : Placement::ABOVE);
                   breath->read(e);
                   segment = getSegment(SegmentType::Breath, e.tick());
                   segment->add(breath);
@@ -4238,7 +4245,7 @@ static bool hasAccidental(Segment* s)
                   continue;
             Chord* c = toChord(e);
             for (Note* n : c->notes()) {
-                  if (n->accidental())
+                  if (n->accidental() && n->accidental()->addToSkyline())
                         return true;
                   }
             }

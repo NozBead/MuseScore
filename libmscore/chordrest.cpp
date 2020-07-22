@@ -64,6 +64,7 @@ ChordRest::ChordRest(Score* s)
       _up          = true;
       _beamMode    = Beam::Mode::AUTO;
       _small       = false;
+      _melismaEnd  = false;
       _crossMeasure = CrossMeasure::UNKNOWN;
       }
 
@@ -79,6 +80,7 @@ ChordRest::ChordRest(const ChordRest& cr, bool link)
       _beamMode     = cr._beamMode;
       _up           = cr._up;
       _small        = cr._small;
+      _melismaEnd   = cr._melismaEnd;
       _crossMeasure = cr._crossMeasure;
 
       for (Lyrics* l : cr._lyrics) {        // make deep copy
@@ -412,17 +414,12 @@ Element* ChordRest::drop(EditData& data)
                   {
                   Breath* b = toBreath(e);
                   b->setPos(QPointF());
-                  int track = staffIdx() * VOICES;
-                  b->setTrack(track);
+                  // allow breath marks in voice > 1
+                  b->setTrack(this->track());
+                  b->setPlacement(b->track() & 1 ? Placement::BELOW : Placement::ABOVE);
+                  Fraction bt = tick() + actualTicks();    
 
-                  // find start tick of next note in staff
-#if 0
-                  int bt = tick() + actualTicks();    // this could make sense if we allowed breath marks in voice > 1
-#else
-                  Segment* next = segment()->nextCR(track);
-                  Fraction bt = next ? next->tick() : score()->lastSegment()->tick();
-#endif
-
+                  bt = tick() + actualTicks();
                   // TODO: insert automatically in all staves?
 
                   Segment* seg = m->undoGetSegment(SegmentType::Breath, bt);
@@ -1219,6 +1216,29 @@ QString ChordRest::accessibleExtraInfo() const
       }
 
 //---------------------------------------------------------
+//   isMelismaEnd
+//    returns true if chordrest represents the end of a melisma
+//---------------------------------------------------------
+
+bool ChordRest::isMelismaEnd() const
+      {
+      return _melismaEnd;
+      }
+
+//---------------------------------------------------------
+//   setMelismaEnd
+//---------------------------------------------------------
+
+void ChordRest::setMelismaEnd(bool v)
+      {
+      _melismaEnd = v;
+      // TODO: don't take "false" at face value
+      // check to see if some other melisma ends here,
+      // in which case we can leave this set to true
+      // for now, rely on the fact that we'll generate the value correctly on layout
+      }
+
+//---------------------------------------------------------
 //   shape
 //---------------------------------------------------------
 
@@ -1268,6 +1288,11 @@ Shape ChordRest::shape() const
       if (adjustWidth)
             shape.addHorizontalSpacing(Shape::SPACING_HARMONY, x1, x2);
       }
+
+      if (isMelismaEnd()) {
+            qreal right = rightEdge();
+            shape.addHorizontalSpacing(Shape::SPACING_LYRICS, right, right);
+            }
 
       return shape;
       }

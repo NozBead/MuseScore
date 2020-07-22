@@ -24,6 +24,7 @@ struct ChordDescription;
 class Element;
 class Score;
 
+// Needs to be duplicated here and in sym.h since moc doesn't handle macros from #include'd files
 #ifdef SCRIPT_INTERFACE
 #define BEGIN_QT_REGISTERED_ENUM(Name) \
 class MSQE_##Name { \
@@ -260,6 +261,9 @@ enum class Sid {
       harmonyFretDist,
       minHarmonyDistance,
       maxHarmonyBarDistance,
+      maxChordShiftAbove,
+      maxChordShiftBelow,
+
       harmonyPlacement,
       romanNumeralPlacement,
       nashvilleNumberPlacement,
@@ -346,6 +350,8 @@ enum class Sid {
       fretStringSpacing,
       fretFretSpacing,
       fretOrientation,
+      maxFretShiftAbove,
+      maxFretShiftBelow,
 
       showPageNumber,
       showPageNumberOne,
@@ -819,7 +825,8 @@ enum class Sid {
       measureNumberFontSpatiumDependent,
       measureNumberFontStyle,
       measureNumberColor,
-      measureNumberOffset,
+      measureNumberPosAbove,
+      measureNumberPosBelow,
       measureNumberOffsetType,
       measureNumberVPlacement,
       measureNumberHPlacement,

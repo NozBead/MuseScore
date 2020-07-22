@@ -70,6 +70,9 @@ void Preferences::init(bool storeInMemoryOnly)
       bool checkUpdateStartup = false;
       bool checkExtensionsUpdateStartup = false;
 #endif
+#if defined(WIN_PORTABLE)
+      checkUpdateStartup = false;
+#endif
 
       bool defaultUsePortAudio = false;
       bool defaultUsePulseAudio = false;
@@ -93,7 +96,11 @@ void Preferences::init(bool storeInMemoryOnly)
       const MuseScoreStyleType defaultAppGlobalStyle = MuseScoreStyleType::LIGHT_FUSION;
 #endif
 
+#if defined(WIN_PORTABLE)
+      QString wd = QString(QDir::cleanPath(QString("%1/../../../Data/%2").arg(QCoreApplication::applicationDirPath()).arg(QCoreApplication::applicationName())));
+#else
       QString wd = QString("%1/%2").arg(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).arg(QCoreApplication::applicationName());
+#endif
 
       _allPreferences = prefs_map_t(
       {
@@ -113,6 +120,7 @@ void Preferences::init(bool storeInMemoryOnly)
             {PREF_APP_PLAYBACK_FOLLOWSONG,                         new BoolPreference(true)},
             {PREF_APP_PLAYBACK_PANPLAYBACK,                        new BoolPreference(true, false)},
             {PREF_APP_PLAYBACK_PLAYREPEATS,                        new BoolPreference(true, false)},
+            {PREF_APP_PLAYBACK_SPEEDINCREMENT,                     new IntPreference(5)},
             {PREF_APP_PLAYBACK_LOOPTOSELECTIONONPLAY,              new BoolPreference(true)},
             {PREF_APP_USESINGLEPALETTE,                            new BoolPreference(false)},
             {PREF_APP_PALETTESCALE,                                new DoublePreference(1.0)},
@@ -130,7 +138,7 @@ void Preferences::init(bool storeInMemoryOnly)
             {PREF_EXPORT_MP3_BITRATE,                              new IntPreference(128, false)},
             {PREF_EXPORT_MUSICXML_EXPORTBREAKS,                    new EnumPreference(QVariant::fromValue(MusicxmlExportBreaks::ALL), false)},
             {PREF_EXPORT_MUSICXML_EXPORTLAYOUT,                    new BoolPreference(true, false)},
-            {PREF_EXPORT_PDF_DPI,                                  new IntPreference(300, false)},
+            {PREF_EXPORT_PDF_DPI,                                  new IntPreference(DPI, false)},
             {PREF_EXPORT_PNG_RESOLUTION,                           new DoublePreference(DPI, false)},
             {PREF_EXPORT_PNG_USETRANSPARENCY,                      new BoolPreference(true, false)},
             {PREF_IMPORT_GUITARPRO_CHARSET,                        new StringPreference("UTF-8", false)},
@@ -169,9 +177,7 @@ void Preferences::init(bool storeInMemoryOnly)
             {PREF_IO_PORTMIDI_OUTPUTLATENCYMILLISECONDS,           new IntPreference(0)},
             {PREF_IO_PULSEAUDIO_USEPULSEAUDIO,                     new BoolPreference(defaultUsePulseAudio, false)},
             {PREF_SCORE_CHORD_PLAYONADDNOTE,                       new BoolPreference(true, false)},
-            {PREF_SCORE_HARMONY_PLAY,                              new BoolPreference(false, false)},
             {PREF_SCORE_HARMONY_PLAY_ONEDIT,                       new BoolPreference(true, false)},
-            {PREF_SCORE_MAGNIFICATION,                             new DoublePreference(1.0, false)},
             {PREF_SCORE_NOTE_PLAYONCLICK,                          new BoolPreference(true, false)},
             {PREF_SCORE_NOTE_DEFAULTPLAYDURATION,                  new IntPreference(300 /* ms */, false)},
             {PREF_SCORE_NOTE_WARNPITCHRANGE,                       new BoolPreference(true, false)},
@@ -184,6 +190,10 @@ void Preferences::init(bool storeInMemoryOnly)
             {PREF_UI_CANVAS_FG_COLOR,                              new ColorPreference(QColor("#f9f9f9"), false)},
             {PREF_UI_CANVAS_BG_WALLPAPER,                          new StringPreference(QFileInfo(QString("%1%2").arg(mscoreGlobalShare).arg("wallpaper/background1.png")).absoluteFilePath(), false)},
             {PREF_UI_CANVAS_FG_WALLPAPER,                          new StringPreference(QFileInfo(QString("%1%2").arg(mscoreGlobalShare).arg("wallpaper/paper5.png")).absoluteFilePath(), false)},
+            {PREF_UI_CANVAS_ZOOM_DEFAULT_TYPE,                     new IntPreference(0, false)},
+            {PREF_UI_CANVAS_ZOOM_DEFAULT_LEVEL,                    new IntPreference(100, false)},
+            {PREF_UI_CANVAS_ZOOM_PRECISION_KEYBOARD,               new IntPreference(2, false)},
+            {PREF_UI_CANVAS_ZOOM_PRECISION_MOUSE,                  new IntPreference(6, false)},
             {PREF_UI_CANVAS_MISC_ANTIALIASEDDRAWING,               new BoolPreference(true, false)},
             {PREF_UI_CANVAS_MISC_SELECTIONPROXIMITY,               new IntPreference(6, false)},
             {PREF_UI_CANVAS_SCROLL_LIMITSCROLLAREA,                new BoolPreference(false, false)},
@@ -248,11 +258,13 @@ void Preferences::init(bool storeInMemoryOnly)
             {PREF_UI_INSPECTOR_STYLED_TEXT_COLOR_DARK,             new ColorPreference(QColor("#36B2FF"))},
             {PREF_PAN_MODIFIER_BASE,                               new DoublePreference(1, true)},
             {PREF_PAN_MODIFIER_STEP,                               new DoublePreference(0.01, true)},
-            {PREF_PAN_MODIFIER_MIN,                                new DoublePreference(0, true)},
+            {PREF_PAN_MODIFIER_MIN,                                new DoublePreference(0.2, true)},
             {PREF_PAN_MODIFIER_MAX,                                new DoublePreference(5, true)},
             {PREF_PAN_CURSOR_VISIBLE,                              new BoolPreference(false, true)},
             {PREF_PAN_CURSOR_POS,                                  new DoublePreference(0.3, true)},
             {PREF_PAN_SMOOTHLY_ENABLED,                            new BoolPreference(false, true)},
+            {PREF_PAN_TELEPORT_LEFT,                               new BoolPreference(true, true) },
+            {PREF_PAN_TELEPORT_RIGHT,                              new BoolPreference(false, true) },
 //            {PREF_PAN_DISTANCE_LEFT,                               new DoublePreference(-250, false)},
 //            {PREF_PAN_DISTANCE_LEFT1,                              new DoublePreference(-125, false)},
 //            {PREF_PAN_DISTANCE_LEFT2,                              new DoublePreference(-50, false)},
@@ -540,6 +552,10 @@ QMap<QString, QVariant> Preferences::getDefaultLocalPreferences() {
                         PREF_UI_CANVAS_FG_COLOR,
                         PREF_UI_CANVAS_BG_WALLPAPER,
                         PREF_UI_CANVAS_FG_WALLPAPER,
+                        PREF_UI_CANVAS_ZOOM_DEFAULT_TYPE,
+                        PREF_UI_CANVAS_ZOOM_DEFAULT_LEVEL,
+                        PREF_UI_CANVAS_ZOOM_PRECISION_KEYBOARD,
+                        PREF_UI_CANVAS_ZOOM_PRECISION_MOUSE,
                         PREF_UI_CANVAS_MISC_ANTIALIASEDDRAWING,
                         PREF_UI_CANVAS_MISC_SELECTIONPROXIMITY,
                         PREF_UI_CANVAS_SCROLL_LIMITSCROLLAREA,

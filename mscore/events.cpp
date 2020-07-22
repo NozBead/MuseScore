@@ -11,7 +11,7 @@
 //=============================================================================
 
 #include "scoreview.h"
-#include "magbox.h"
+#include "zoombox.h"
 #include "musescore.h"
 #include "seq.h"
 #include "texttools.h"
@@ -117,18 +117,18 @@ bool ScoreView::gestureEvent(QGestureEvent *event)
             // Zoom in/out when receiving a pinch gesture
             QPinchGesture *pinch = static_cast<QPinchGesture *>(gesture);
 
-            static qreal magStart = 1.0;
+            static qreal startLogicalZoomLevel = 1.0;
             if (pinch->state() == Qt::GestureStarted) {
-                  magStart = lmag();
+                  startLogicalZoomLevel = logicalZoomLevel();
                   }
             if (pinch->changeFlags() & QPinchGesture::ScaleFactorChanged) {
-                  // On Windows, totalScaleFactor() contains the net magnification.
-                  // On OS X, totalScaleFactor() is 1, and scaleFactor() contains the net magnification.
+                  // On Windows, totalScaleFactor() contains the net zoom.
+                  // On OS X, totalScaleFactor() is 1, and scaleFactor() contains the net zoom.
                   qreal value = pinch->totalScaleFactor();
                   if (value == 1) {
                         value = pinch->scaleFactor();
                         }
-                  zoom(magStart*value, pinch->centerPoint());
+                  setLogicalZoom(ZoomIndex::ZOOM_FREE, startLogicalZoomLevel * value, pinch->centerPoint());
                   }
             }
       return true;
@@ -175,7 +175,7 @@ void ScoreView::wheelEvent(QWheelEvent* event)
 
       if (event->modifiers() & Qt::ControlModifier) { // Windows touch pad pinches also execute this
             QApplication::sendPostedEvents(this, 0);
-            zoomStep(nReal, event->pos());
+            zoomBySteps(nReal, true, event->posF());
             return;
             }
 
@@ -205,8 +205,12 @@ void ScoreView::wheelEvent(QWheelEvent* event)
 
 void ScoreView::resizeEvent(QResizeEvent* /*ev*/)
       {
-      if (_magIdx != MagIdx::MAG_FREE)
-            setMag(mscore->getMag(this));
+      // No need to do anything if we're not the currently visible score view.
+      if (this != mscore->currentScoreView())
+            return;
+
+      setLogicalZoom(_zoomIndex, calculateLogicalZoomLevel(_zoomIndex, logicalZoomLevel()));
+
       emit sizeChanged();
 
       // The score may need to be repositioned now.
@@ -399,6 +403,11 @@ void ScoreView::mousePressEventNormal(QMouseEvent* ev)
                   }
             else {
                   if (st == SelectType::ADD) {
+                        // convert range to list
+                        if (e->score()->selection().isRange()) {
+                              e->score()->selection().setState(SelState::LIST);
+                              e->score()->setUpdateAll();   // needed to clear selection rectangle
+                              }
                         // e is the top element in stacking order,
                         // but we want to replace it with "first non-measure element after a selected element"
                         // (if such an element exists)
@@ -450,10 +459,10 @@ void ScoreView::mousePressEventNormal(QMouseEvent* ev)
                         _score->select(m, st, staffIdx);
                         _score->setUpdateAll();
                         }
-                  else if (st != SelectType::ADD)
+                  else if (st == SelectType::SINGLE)
                         modifySelection = true;
                   }
-            else if (st != SelectType::ADD)
+            else if (st == SelectType::SINGLE)
                   modifySelection = true;
             }
       _score->update();
@@ -1115,6 +1124,7 @@ void ScoreView::changeState(ViewState s)
                         e->triggerLayout();
                         }
                   setDropTarget(0); // this also resets dropAnchor
+                  _score->selection().unlock("drag");
                   _score->endCmd();
                   break;
             case ViewState::DRAG_OBJECT:

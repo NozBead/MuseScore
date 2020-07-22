@@ -60,7 +60,7 @@
 #include "libmscore/system.h"
 #include "libmscore/tuplet.h"
 #include "libmscore/keysig.h"
-#include "magbox.h"
+#include "zoombox.h"
 #include "libmscore/measure.h"
 #include "libmscore/undo.h"
 #include "libmscore/repeatlist.h"
@@ -252,7 +252,7 @@ static bool readScoreError(const QString& name, Score::FileError error, bool ask
 
 bool MuseScore::checkDirty(MasterScore* s)
       {
-      if (s->dirty() || s->created()) {
+      if (s->dirty() || (s->created() && !s->startedEmpty())) {
             QMessageBox::StandardButton n = QMessageBox::warning(this, tr("MuseScore"),
                tr("Save changes to the score \"%1\"\n"
                "before closing?").arg(s->fileInfo()->completeBaseName()),
@@ -1455,7 +1455,11 @@ QString MuseScore::getPaletteFilename(bool open, const QString& name)
       {
       QString title;
       QString filter;
+#if defined(WIN_PORTABLE)
+      QString wd      = QDir::cleanPath(QString("%1/../../../Data/settings").arg(QCoreApplication::applicationDirPath()).arg(QCoreApplication::applicationName()));
+#else
       QString wd      = QString("%1/%2").arg(QStandardPaths::writableLocation(QStandardPaths::HomeLocation)).arg(QCoreApplication::applicationName());
+#endif
       if (open) {
             title  = tr("Load Palette");
             filter = tr("MuseScore Palette") + " (*.mpal)";
@@ -2479,6 +2483,9 @@ Score::FileError readScore(MasterScore* score, QString name, bool ignoreVersionE
                   score->setCreated(true); // force save as for imported files
             }
 
+      for (Part* p : score->parts()) {
+            p->updateHarmonyChannels(false);
+            }
       score->rebuildMidiMapping();
       score->setSoloMute();
       for (Score* s : score->scoreList()) {

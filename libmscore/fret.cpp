@@ -84,6 +84,22 @@ FretDiagram::~FretDiagram()
       }
 
 //---------------------------------------------------------
+//   linkedClone
+//---------------------------------------------------------
+
+Element* FretDiagram::linkedClone()
+      {
+      FretDiagram* e = clone();
+      e->setAutoplace(true);
+      if (_harmony) {
+            Element* newHarmony = _harmony->linkedClone();
+            e->add(newHarmony);
+            }
+      score()->undo(new Link(e, this));
+      return e;
+      }
+
+//---------------------------------------------------------
 //   fromString
 ///   Create diagram from string like "XO-123"
 ///   Always assume barre on the first visible fret
@@ -1179,11 +1195,14 @@ void FretDiagram::add(Element* e)
       if (e->isHarmony()) {
             _harmony = toHarmony(e);
             _harmony->setTrack(track());
-            _harmony->resetProperty(Pid::OFFSET);
+            if (_harmony->propertyFlags(Pid::OFFSET) == PropertyFlags::STYLED)
+                  _harmony->resetProperty(Pid::OFFSET);
             _harmony->setProperty(Pid::ALIGN, int(Align::HCENTER | Align::TOP));
+            _harmony->setPropertyFlags(Pid::ALIGN, PropertyFlags::UNSTYLED);
             }
-      else
+      else {
             qWarning("FretDiagram: cannot add <%s>\n", e->name());
+            }
       }
 
 //---------------------------------------------------------

@@ -20,7 +20,7 @@
 #include "editdrumset.h"
 #include "editstaff.h"
 #include "globals.h"
-#include "magbox.h"
+#include "zoombox.h"
 #include "measureproperties.h"
 #include "musescore.h"
 #include "navigator.h"
@@ -117,7 +117,7 @@ ScoreView::ScoreView(QWidget* parent)
       setAttribute(Qt::WA_OpaquePaintEvent);
 #endif
       setAttribute(Qt::WA_NoSystemBackground);
-      setFocusPolicy(Qt::StrongFocus);
+      setFocusPolicy(Qt::ClickFocus);
       setAttribute(Qt::WA_InputMethodEnabled);
       setAttribute(Qt::WA_KeyCompression);
       setAttribute(Qt::WA_StaticContents);
@@ -138,10 +138,12 @@ ScoreView::ScoreView(QWidget* parent)
 
       setContextMenuPolicy(Qt::DefaultContextMenu);
 
-      double mag  = preferences.getDouble(PREF_SCORE_MAGNIFICATION) * (mscore->physicalDotsPerInch() / DPI);
-      _matrix     = QTransform(mag, 0.0, 0.0, mag, 0.0, 0.0);
-      imatrix     = _matrix.inverted();
-      _magIdx     = preferences.getDouble(PREF_SCORE_MAGNIFICATION) == 1.0 ? MagIdx::MAG_100 : MagIdx::MAG_FREE;
+      const auto defaultLogicalZoom = ZoomBox::getDefaultLogicalZoom();
+      _zoomIndex = defaultLogicalZoom.index;
+      const qreal physicalZoomLevel = defaultLogicalZoom.level * (mscore->physicalDotsPerInch() / DPI);
+      _matrix = QTransform(physicalZoomLevel, 0.0, 0.0, physicalZoomLevel, 0.0, 0.0);
+      imatrix = _matrix.inverted();
+
       focusFrame  = 0;
       _bgColor    = Qt::darkBlue;
       _fgColor    = Qt::white;
@@ -369,6 +371,13 @@ void ScoreView::objectPopup(const QPoint& pos, Element* obj)
             mscore->selectSimilarInRange(obj);
       else if (cmd == "select-dialog")
             mscore->selectElementDialog(obj);
+      else if (cmd == "realize-chord-symbols") {
+            if (obj->isEditable()) {
+                  if (obj->score())
+                        obj->score()->select(obj, SelectType::ADD);
+                  mscore->realizeChordSymbols();
+                  }
+            }
       else {
             _score->startCmd();
             elementPropertyAction(cmd, obj);
@@ -657,8 +666,8 @@ void ScoreView::moveControlCursor(const Fraction& tick)
       int controlX = _controlCursor->rect().x();
       double distance = realX - controlX;
 
-      if (seq->isPlaying()) {
-            //playbackCursor in front of the controlCursor
+      if (seq->isPlaying() && isCursorDistanceReasonable()) {
+            // playbackCursor in front of the controlCursor
             if (distance > _panSettings.rightDistance)
                   _controlModifier += _panSettings.controlModifierSteps;
             else if (distance > _panSettings.rightDistance1 && _controlModifier < _panSettings.rightMod1)
@@ -671,7 +680,7 @@ void ScoreView::moveControlCursor(const Fraction& tick)
                   _controlModifier -= _panSettings.controlModifierSteps;
             else if (_controlModifier > _panSettings.rightMod3 && distance < _panSettings.rightDistance3)
                   _controlModifier = _panSettings.controlModifierBase;
-            //playbackCursor behind the controlCursor
+            // playbackCursor behind the controlCursor
             else if (distance < _panSettings.leftDistance)
                   _controlModifier -= _panSettings.controlModifierSteps;
             else if (_controlModifier < _panSettings.leftMod1 && distance > _panSettings.leftDistance1)
@@ -681,7 +690,7 @@ void ScoreView::moveControlCursor(const Fraction& tick)
             else if (_controlModifier < _panSettings.leftMod3 && distance > _panSettings.leftDistance3)
                   _controlModifier = _panSettings.controlModifierBase;
 
-            //enforce limits
+            // enforce limits
             if (_controlModifier < _panSettings.minContinuousModifier)
                   _controlModifier = _panSettings.minContinuousModifier;
             else if (_controlModifier > _panSettings.maxContinuousModifier)
@@ -723,11 +732,35 @@ void ScoreView::moveControlCursor(const Fraction& tick)
             }
 
 
-      //Calculate the position of the controlCursor based on the timeElapsed (which is not the real time that has passed)
+      // Calculate the position of the controlCursor based on the timeElapsed (which is not the real time that has passed)
       qreal x = score()->firstMeasure()->pos().x() + (score()->lastMeasure()->pos().x() - score()->firstMeasure()->pos().x()) * (_timeElapsed / (score()->duration() * 1000));
       x -= score()->spatium();
       _controlCursor->setRect(QRectF(x, _cursor->rect().y(), _cursor->rect().width(), _cursor->rect().height()));
       update(_matrix.mapRect(_controlCursor->rect()).toRect().adjusted(-1,-1,1,1));
+      }
+
+//---------------------------------------------------------
+//   isCursorDistanceReasonable
+//    check if the control cursor needs to be teleported
+//    to catch up with the playback cursor (for smooth panning)
+//---------------------------------------------------------
+
+bool ScoreView::isCursorDistanceReasonable()
+      {
+      qreal viewWidth = canvasViewport().width();
+      qreal controlX = _controlCursor->rect().x();
+      qreal playbackX = _cursor->rect().x();
+      qreal cursorDistance = abs(controlX - playbackX);
+      double maxLeftDistance = viewWidth * (_panSettings.controlCursorScreenPos + 0.07); // 0.05 left margin + 0.02 for making this less sensitive
+      double maxRightDistance = viewWidth * (1 - _panSettings.controlCursorScreenPos + 0.15); // teleporting to the right is harder to trigger (we don't want to overdo it)
+
+      if (controlX < playbackX && _panSettings.teleportRightEnabled)
+            return cursorDistance < maxRightDistance;
+
+      if (playbackX < controlX && _panSettings.teleportLeftEnabled)
+            return cursorDistance < maxLeftDistance;
+
+      return true;
       }
 
 //---------------------------------------------------------
@@ -1511,52 +1544,33 @@ void ScoreView::paint(const QRect& r, QPainter& p)
       }
 
 //---------------------------------------------------------
-//   zoomStep: zoom in or out by some number of steps
+//   zoomBySteps
+//    Zooms in or out by the specified number of keyboard- or mouse-based zoom steps (positive to zoom in, negative to zoom out).
+//    usingMouse is optional and may be omitted to zoom by keyboard-based steps.
+//    pos is optional and may be omitted to zoom relative to the top-left corner.
 //---------------------------------------------------------
 
-void ScoreView::zoomStep(qreal step, const QPoint& pos)
+void ScoreView::zoomBySteps(const qreal numSteps, const bool usingMouse/* = false*/, const QPointF& pos/* = QPointF()*/)
       {
-      qreal _mag = lmag();
+      // Calculate the new logical zoom level by multiplying it the current logical zoom level by the factor necessary to get it
+      // to double every N steps, where N is the user's preferred "precision" for the specified zoom method (keyboard or mouse).
+      const auto precision = preferences.getInt(usingMouse ? PREF_UI_CANVAS_ZOOM_PRECISION_MOUSE : PREF_UI_CANVAS_ZOOM_PRECISION_KEYBOARD);
+      const auto stepFactor = std::pow(2.0, 1.0 / qBound(ZOOM_PRECISION_MIN, precision, ZOOM_PRECISION_MAX));
+      auto logicalLevel = logicalZoomLevel() * std::pow(stepFactor, numSteps);
 
-      _mag *= qPow(1.1, step);
+      // Floating-point calculations inevitably introduce rounding errors. Check if the new logical zoom level is very close to
+      // the mathematically correct value based on the current step; if it is, snap it to the right value. This is necessary in
+      // order to avoid accumulating rounding errors as the user repeatedly zooms in and out.
+      static constexpr qreal epsilon = 0.0001;
+      const auto levelCheck = precision * std::log2(logicalLevel);
+      if (std::abs(std::remainder(levelCheck, 1.0)) < epsilon)
+            logicalLevel = std::pow(2.0, (levelCheck - std::remainder(levelCheck, 1.0)) / precision);
 
-      zoom(_mag, QPointF(pos));
-      }
+      // If the new zoom level is exactly equal to one of the numeric presets, use the preset; otherwise, it's free zoom.
+      const auto i = std::find(zoomEntries.cbegin(), zoomEntries.cend(), static_cast<int>(100.0 * logicalLevel));
+      const auto index = ((i != zoomEntries.cend()) && i->isNumericPreset() && (i->level == 100.0 * logicalLevel)) ? i->index : ZoomIndex::ZOOM_FREE;
 
-//---------------------------------------------------------
-//   zoom: zoom to some absolute zoom level
-//---------------------------------------------------------
-
-void ScoreView::zoom(qreal _mag, const QPointF& pos)
-      {
-      QPointF p1 = imatrix.map(pos);
-
-      if (_mag > 16.0)
-            _mag = 16.0;
-      else if (_mag < 0.05)
-            _mag = 0.05;
-
-      mscore->setMag(_mag);
-
-      double m = _mag * mscore->physicalDotsPerInch() / DPI;
-
-      setMag(m);
-
-      _magIdx    = MagIdx::MAG_FREE;
-      QPointF p2 = imatrix.map(pos);
-      QPointF p3 = p2 - p1;
-      int dx     = lrint(p3.x() * m);
-      int dy     = lrint(p3.y() * m);
-
-      constraintCanvas(&dx, &dy);
-
-      _matrix.setMatrix(_matrix.m11(), _matrix.m12(), _matrix.m13(), _matrix.m21(),
-         _matrix.m22(), _matrix.m23(), _matrix.dx()+dx, _matrix.dy()+dy, _matrix.m33());
-      imatrix = _matrix.inverted();
-      scroll(dx, dy, QRect(0, 0, width(), height()));
-      emit viewRectChanged();
-      emit offsetChanged(_matrix.dx(), _matrix.dy());
-      update();
+      setLogicalZoom(index, logicalLevel, pos);
       }
 
 //-----------------------------------------------------------------------------
@@ -1578,14 +1592,14 @@ void ScoreView::constraintCanvas (int* dxx, int* dyy)
 
       if (firstPage && lastPage) {
             QPointF offsetPt(xoffset(), yoffset());
-            QRectF firstPageRect(firstPage->pos().x() * mag(),
-                                      firstPage->pos().y() * mag(),
-                                      firstPage->width() * mag(),
-                                      firstPage->height() * mag());
-            QRectF lastPageRect(lastPage->pos().x() * mag(),
-                                         lastPage->pos().y() * mag(),
-                                         lastPage->width() * mag(),
-                                         lastPage->height() * mag());
+            QRectF firstPageRect(firstPage->pos().x() * physicalZoomLevel(),
+                                      firstPage->pos().y() * physicalZoomLevel(),
+                                      firstPage->width() * physicalZoomLevel(),
+                                      firstPage->height() * physicalZoomLevel());
+            QRectF lastPageRect(lastPage->pos().x() * physicalZoomLevel(),
+                                         lastPage->pos().y() * physicalZoomLevel(),
+                                         lastPage->width() * physicalZoomLevel(),
+                                         lastPage->height() * physicalZoomLevel());
             QRectF pagesRect     = firstPageRect.united(lastPageRect).translated(offsetPt);
             bool limitScrollArea = preferences.getBool(PREF_UI_CANVAS_SCROLL_LIMITSCROLLAREA);
             if (!limitScrollArea) {
@@ -1621,7 +1635,7 @@ void ScoreView::constraintCanvas (int* dxx, int* dyy)
                               }
                         }
                   }
-            else { // move left, dx < 0
+            else if (dx < 0) { // move left
                   if (toPagesRect.left() < rect.left() && toPagesRect.right() < rect.right()) {
                         if (pagesRect.width() <= rect.width()) {
                               dx = rect.left() - pagesRect.left();
@@ -1658,7 +1672,7 @@ void ScoreView::constraintCanvas (int* dxx, int* dyy)
                               }
                         }
                   }
-            else { // move up, dy < 0
+            else if (dy < 0) { // move up
                   if (toPagesRect.top() < rect.top() && toPagesRect.bottom() < rect.bottom()) {
                         if (pagesRect.height() <= rect.height()) {
                               dy = rect.top() - pagesRect.top();
@@ -1674,25 +1688,25 @@ void ScoreView::constraintCanvas (int* dxx, int* dyy)
       }
 
 //---------------------------------------------------------
-//   setMag
-//    nmag - physical scale
+//   setPhysicalZoomLevel
 //---------------------------------------------------------
 
-void ScoreView::setMag(qreal nmag)
+void ScoreView::setPhysicalZoomLevel(const qreal physicalLevel)
       {
-      qreal m = _matrix.m11();
+      const qreal currentPhysicalLevel = _matrix.m11();
 
-      if (nmag == m)
+      if (physicalLevel == currentPhysicalLevel)
             return;
-      double deltamag = nmag / m;
 
-      _matrix.setMatrix(nmag, _matrix.m12(), _matrix.m13(), _matrix.m21(),
-         nmag, _matrix.m23(), _matrix.dx()*deltamag, _matrix.dy()*deltamag, _matrix.m33());
+      const double deltaPhysicalLevel = physicalLevel / currentPhysicalLevel;
+
+      _matrix.setMatrix(physicalLevel, _matrix.m12(), _matrix.m13(), _matrix.m21(),
+            physicalLevel, _matrix.m23(), _matrix.dx() * deltaPhysicalLevel, _matrix.dy() * deltaPhysicalLevel, _matrix.m33());
       imatrix = _matrix.inverted();
-      emit scaleChanged(nmag * score()->spatium());
+      emit scaleChanged(physicalLevel * score()->spatium());
       if (editData.grips) {
-            qreal w = 8.0 / nmag;
-            qreal h = 8.0 / nmag;
+            qreal w = 8.0 / physicalLevel;
+            qreal h = 8.0 / physicalLevel;
             QRectF r(-w*.5, -h*.5, w, h);
             for (int i = 0; i < editData.grips; ++i) {
                   QPointF p(editData.grip[i].center());
@@ -1703,15 +1717,33 @@ void ScoreView::setMag(qreal nmag)
       }
 
 //---------------------------------------------------------
-//   setMag
-//    mag - logical scale
+//   setLogicalZoom
+//    Sets the zoom type and logical zoom level. pos is optional and may be omitted to zoom relative to the top-left corner.
 //---------------------------------------------------------
 
-void ScoreView::setMag(MagIdx idx, double mag)
+void ScoreView::setLogicalZoom(ZoomIndex index, qreal logicalLevel, const QPointF& pos/* = QPointF()*/)
       {
-      _magIdx = idx;
-      setMag(mag * (mscore->physicalDotsPerInch() / DPI));
-      int dx = 0, dy = 0;
+      _zoomIndex = index;
+
+      const qreal newLogicalLevel = qBound(ZOOM_LEVEL_MIN, logicalLevel, ZOOM_LEVEL_MAX);
+
+      const qreal newPhysicalLevel = newLogicalLevel * mscore->physicalDotsPerInch() / DPI;
+
+      const QPointF p1 = pos.isNull() ? pos : imatrix.map(pos);
+
+      setPhysicalZoomLevel(newPhysicalLevel);
+
+      int dx = 0;
+      int dy = 0;
+
+      if (!pos.isNull()) {
+            const QPointF p2 = imatrix.map(pos);
+            const QPointF p3 = p2 - p1;
+
+            dx = lrint(p3.x() * newPhysicalLevel);
+            dy = lrint(p3.y() * newPhysicalLevel);
+            }
+
       constraintCanvas(&dx, &dy);
       if (dx != 0 || dy != 0) {
             _matrix.setMatrix(_matrix.m11(), _matrix.m12(), _matrix.m13(), _matrix.m21(),
@@ -1720,8 +1752,87 @@ void ScoreView::setMag(MagIdx idx, double mag)
             scroll(dx, dy, QRect(0, 0, width(), height()));
             emit offsetChanged(_matrix.dx(), _matrix.dy());
             }
+
       emit viewRectChanged();
       update();
+
+      mscore->updateZoomBox(index, newLogicalLevel);
+      }
+
+//---------------------------------------------------------
+//   calculateLogicalZoomLevel
+//    Calculates the logical zoom level. logicalFreeZoomLevel is optional and may be omitted unless index is ZoomIndex::ZOOM_FREE.
+//---------------------------------------------------------
+
+qreal ScoreView::calculateLogicalZoomLevel(const ZoomIndex index, const qreal logicalFreeZoomLevel/* = 0.0*/) const
+      {
+      return calculatePhysicalZoomLevel(index, logicalFreeZoomLevel) / (mscore->physicalDotsPerInch() / DPI);
+      }
+
+//---------------------------------------------------------
+//   calculatePhysicalZoomLevel
+//    Calculates the physical zoom level. logicalFreeZoomLevel is optional and may be omitted unless index is ZoomIndex::ZOOM_FREE.
+//---------------------------------------------------------
+
+qreal ScoreView::calculatePhysicalZoomLevel(const ZoomIndex index, const qreal logicalFreeZoomLevel/* = 0.0*/) const
+      {
+      if (!_score)
+            return 1.0;
+
+      const qreal l2p = mscore->physicalDotsPerInch() / DPI;
+      const qreal cw = width();
+      const qreal ch = height();
+      const qreal pw = _score->styleD(Sid::pageWidth);
+      const qreal ph = _score->styleD(Sid::pageHeight);
+
+      qreal result = 0.0;
+
+      switch (index) {
+            case ZoomIndex::ZOOM_PAGE_WIDTH:
+                  result = cw / (pw * DPI);
+                  break;
+
+            case ZoomIndex::ZOOM_WHOLE_PAGE: {
+                  const qreal mag1 = cw / (pw * DPI);
+                  const qreal mag2 = ch / (ph * DPI);
+                  result = std::min(mag1, mag2);
+                  }
+                  break;
+
+            case ZoomIndex::ZOOM_TWO_PAGES: {
+                  qreal mag1 = 0.0;
+                  qreal mag2 = 0.0;
+                  if (MScore::verticalOrientation()) {
+                        mag1 = ch / (ph * 2.0 * DPI + MScore::verticalPageGap);
+                        mag2 = cw / (pw * DPI);
+                        }
+                  else {
+                        mag1 = cw / (pw * 2.0 * DPI + std::max(MScore::horizontalPageGapEven, MScore::horizontalPageGapOdd));
+                        mag2 = ch / (ph * DPI);
+                        }
+                  result = std::min(mag1, mag2);
+                  }
+                  break;
+
+            case ZoomIndex::ZOOM_FREE:
+                  // If the zoom type is free zoom, the caller is required to pass the logical free-zoom level.
+                  Q_ASSERT(logicalFreeZoomLevel != 0.0);
+                  result = logicalFreeZoomLevel * l2p;
+                  break;
+
+            default: {
+                  // If the selected zoom entry is one of the numeric presets, set the physical zoom level accordingly; otherwise,
+                  // initialize the physical zoom level to 0.0 so that it can be overridden below with the actual current value.
+                  const auto i = std::find(zoomEntries.cbegin(), zoomEntries.cend(), index);
+                  result = ((i != zoomEntries.cend()) && i->isNumericPreset()) ? (i->level / 100.0 * l2p) : 0.0;
+                  }
+                  break;
+            }
+
+      if (result < 0.0001)
+            result = physicalZoomLevel();
+
+      return result;
       }
 
 //---------------------------------------------------------
@@ -2170,7 +2281,11 @@ void ScoreView::cmd(const char* s)
               "next-track",
               "prev-track",
               "next-measure",
-              "prev-measure"}, [](ScoreView* cv, const QByteArray& cmd) {
+              "prev-measure",
+              "next-system",
+              "prev-system",
+              "empty-trailing-measure",
+              "top-staff"}, [](ScoreView* cv, const QByteArray& cmd) {
 
                   if (cv->score()->selection().isLocked()) {
                         LOGW() << "unable exec cmd: " << cmd << ", selection locked, reason: " << cv->score()->selection().lockReason();
@@ -2193,6 +2308,8 @@ void ScoreView::cmd(const char* s)
                         }
                   else {
                         Element* ele = cv->score()->move(cmd);
+                        if (cmd == "empty-trailing-measure")
+                              cv->changeState(ViewState::NOTE_ENTRY);
                         if (ele)
                               cv->adjustCanvasPosition(ele, false);
                         cv->score()->setPlayChord(true);
@@ -2387,7 +2504,16 @@ void ScoreView::cmd(const char* s)
               "interval8", "interval-8",
               "interval9", "interval-9"}, [](ScoreView* cv, const QByteArray& cmd) {
                   int n = cmd.mid(8).toInt();
-                  std::vector<Note*> nl = cv->score()->selection().noteList();
+                  std::vector<Note*> nl;
+                  if (cv->score()->selection().isRange()) {
+                        for (ChordRest* cr : cv->score()->getSelectedChordRests()) {
+                              if (cr->isChord())
+                                    nl.push_back(n > 0 ? toChord(cr)->upNote() : toChord(cr)->downNote());
+                              }
+                        }
+                  else {
+                        nl = cv->score()->selection().noteList();
+                        }
                   if (!nl.empty()) {
                         //if (!noteEntryMode())
                         //      ;     // TODO: state    sm->postEvent(new CommandEvent("note-input"));
@@ -2896,10 +3022,18 @@ void ScoreView::startNoteEntry()
                   intersect.translate(-p->x(), -p->y());
                   QList<Element*> el = p->items(intersect);
                   ChordRest* lastSelected = score()->selection().currentCR();
+                  if (lastSelected && lastSelected->voice()) {
+                        // if last selected CR was not in voice 1,
+                        // find CR in voice 1 instead
+                        int track = trackZeroVoice(lastSelected->track());
+                        Segment* s = lastSelected->segment();
+                        if (s)
+                              lastSelected = s->nextChordRest(track, true);
+                        }
                   for (Element* e : el) {
                         // loop through visible elements
                         // looking for the CR in voice 1 with earliest tick and highest staff position
-                        // but stop we find the last selected CR
+                        // but stop if we find the last selected CR
                         ElementType et = e->type();
                         if (et == ElementType::NOTE || et == ElementType::REST) {
                               if (e->voice())
@@ -3148,19 +3282,19 @@ QVariant ScoreView::inputMethodQuery(Qt::InputMethodQuery query) const
       }
 
 //---------------------------------------------------------
-//   lmag
+//   logicalZoomLevel
 //---------------------------------------------------------
 
-qreal ScoreView::lmag() const
+qreal ScoreView::logicalZoomLevel() const
       {
       return _matrix.m11() / (mscore->physicalDotsPerInch() / DPI);
       }
 
 //---------------------------------------------------------
-//   mag
+//   physicalZoomLevel
 //---------------------------------------------------------
 
-qreal ScoreView::mag() const
+qreal ScoreView::physicalZoomLevel() const
       {
       return _matrix.m11();
       }
@@ -3230,8 +3364,8 @@ void ScoreView::pageNext()
       qreal x, y;
       if (MScore::verticalOrientation()) {
             x        = thinPadding;
-            y        = yoffset() - (page->height() + thickPadding) * mag();
-            qreal ly = thinPadding - page->pos().y() * mag();
+            y        = yoffset() - (page->height() + thickPadding) * physicalZoomLevel();
+            qreal ly = thinPadding - page->pos().y() * physicalZoomLevel();
             if (y <= ly - height() * scrollStep) {
                   pageEnd();
                   return;
@@ -3239,8 +3373,8 @@ void ScoreView::pageNext()
             }
       else {
             y        = thinPadding;
-            x        = xoffset() - (page->width() + thickPadding) * mag();
-            qreal lx = thinPadding - page->pos().x() * mag();
+            x        = xoffset() - (page->width() + thickPadding) * physicalZoomLevel();
+            qreal lx = thinPadding - page->pos().x() * physicalZoomLevel();
             if (x <= lx - width() * scrollStep) {
                   pageEnd();
                   return;
@@ -3266,14 +3400,14 @@ void ScoreView::screenNext()
             // Vertical frames aren't laid out in continuous view
             while (lm->isVBoxBase())
                   lm = lm->prev();
-            qreal lx = (lm->pos().x() + lm->width()) * mag() - width() * scrollStep;
+            qreal lx = (lm->pos().x() + lm->width()) * physicalZoomLevel() - width() * scrollStep;
             if (x < -lx)
                   x = -lx;
             }
       else {
             y -= height() * scrollStep;
             MeasureBase* lm { score()->lastMeasureMM() };
-            qreal ly { (lm->canvasPos().y() + lm->height()) * mag() - height() * scrollStep };
+            qreal ly { (lm->canvasPos().y() + lm->height()) * physicalZoomLevel() - height() * scrollStep };
             // Special case to jump to top of next page in horizontal view.
             if (score()->layoutMode() == LayoutMode::PAGE && !MScore::verticalOrientation()
                && y <= -ly - height() * scrollStep) {
@@ -3303,13 +3437,13 @@ void ScoreView::pagePrev()
       qreal x, y;
       if (MScore::verticalOrientation()) {
             x  = thinPadding;
-            y  = yoffset() + (page->height() + thickPadding) * mag();
+            y  = yoffset() + (page->height() + thickPadding) * physicalZoomLevel();
             if (y > thinPadding)
                   y = thinPadding;
             }
       else {
             y  = thinPadding;
-            x  = xoffset() + (page->width() + thickPadding) * mag();
+            x  = xoffset() + (page->width() + thickPadding) * physicalZoomLevel();
             if (x > thinPadding)
                   x = thinPadding;
             }
@@ -3338,12 +3472,12 @@ void ScoreView::screenPrev()
             if (score()->layoutMode() == LayoutMode::PAGE && !MScore::verticalOrientation()
                && y >= thinPadding + height() * scrollStep) {
                   Page* page { score()->pages().front() };
-                  x += (page->width() + thickPadding) * mag();
+                  x += (page->width() + thickPadding) * physicalZoomLevel();
                   // The condition prevents jumping to the bottom of the
                   // first page after reaching the top
-                  if (x < thinPadding + (page->width() + thickPadding) * mag()) {
+                  if (x < thinPadding + (page->width() + thickPadding) * physicalZoomLevel()) {
                         MeasureBase* lm { score()->lastMeasureMM() };
-                        y = -(lm->canvasPos().y() + lm->height()) * mag() + height() * scrollStep;
+                        y = -(lm->canvasPos().y() + lm->height()) * physicalZoomLevel() + height() * scrollStep;
                         }
                   if (x > thinPadding)
                         x = thinPadding;
@@ -3381,19 +3515,19 @@ void ScoreView::pageEnd()
             // Vertical frames aren't laid out in continuous view
             while (lm->isVBoxBase())
                   lm = lm->prev();
-            qreal lx = (lm->pos().x() + lm->width()) * mag() - scrollStep * width();
+            qreal lx = (lm->pos().x() + lm->width()) * physicalZoomLevel() - scrollStep * width();
             setOffset(-lx, yoffset());
             }
       else {
             qreal lx { -thinPadding };
             if (score()->layoutMode() == LayoutMode::PAGE && !MScore::verticalOrientation()) {
                   for (int i { 0 }; i < score()->npages() - 1; ++i)
-                        lx += score()->pages().at(i)->width() * mag();
+                        lx += score()->pages().at(i)->width() * physicalZoomLevel();
                   }
-            if (lm->system() && lm->system()->page()->width() * mag() > width())
-                  lx = (lm->canvasPos().x() + lm->width()) * mag() - width() * scrollStep;
+            if (lm->system() && lm->system()->page()->width() * physicalZoomLevel() > width())
+                  lx = (lm->canvasPos().x() + lm->width()) * physicalZoomLevel() - width() * scrollStep;
 
-            qreal ly { (lm->canvasPos().y() + lm->height()) * mag() - height() * scrollStep };
+            qreal ly { (lm->canvasPos().y() + lm->height()) * physicalZoomLevel() - height() * scrollStep };
             setOffset(-lx, -ly);
             }
       update();
@@ -3438,45 +3572,45 @@ void ScoreView::adjustCanvasPosition(const Element* el, bool playBack, int staff
 
             qreal curPosR = curPos.right();                    // Position on the canvas
             qreal curPosL = curPos.left();                     // Position on the canvas
-            qreal curPosMagR = curPosR * mag() + xoffset(); // Position in the screen
-            qreal curPosMagL = curPosL * mag() + xoffset(); // Position in the screen
+            qreal curPosScrR = curPosR * physicalZoomLevel() + xoffset(); // Position in the screen
+            qreal curPosScrL = curPosL * physicalZoomLevel() + xoffset(); // Position in the screen
             qreal marginLeft = width() * 0.05;
             qreal marginRight = width() * 0.05; // leaves 5% margin to the right
 
 //            if (_continuousPanel->active())                           causes jump
-//                  marginLeft += _continuousPanel->width() * mag();
+//                  marginLeft += _continuousPanel->width() * physicalZoomLevel();
 
             // this code implements "continuous" panning
             // it could potentially be enabled via more panning options
             if (playBack && _cursor && seq->isPlaying() && preferences.getBool(PREF_PAN_SMOOTHLY_ENABLED)) {
                   // keep playback cursor pinned at 35% (or at the percent of controlCursorScreenPos + 5%)
-                  xo = -curPosL * mag() + marginLeft + width() * _panSettings.controlCursorScreenPos;
+                  xo = -curPosL * physicalZoomLevel() + marginLeft + width() * _panSettings.controlCursorScreenPos;
                   }
-            else if (round(curPosMagR) > round(width() - marginRight)) {
+            else if (round(curPosScrR) > round(width() - marginRight)) {
                   // focus in or beyond right margin
                   // pan to left margin in playback,
                   // most of the way left in note entry,
                   // otherwise just enforce right margin
                   if (playBack)
-                        xo = -curPosL * mag() + marginLeft;
+                        xo = -curPosL * physicalZoomLevel() + marginLeft;
                   else if (noteEntryMode())
-                        xo = -curPosL * mag() + marginLeft + width() * 0.2;
+                        xo = -curPosL * physicalZoomLevel() + marginLeft + width() * 0.2;
                   else
-                        xo = -curPosR * mag() + width() - marginRight;
+                        xo = -curPosR * physicalZoomLevel() + width() - marginRight;
                   }
-            else if (round(curPosMagL) < round(marginLeft) ) {
+            else if (round(curPosScrL) < round(marginLeft) ) {
                   // focus in or beyond left margin
                   // enforce left margin
                   // (previously we moved canvas all the way right,
                   // but this made sense only when navigating right-to-left)
-                  xo = -curPosL * mag() + marginLeft;
+                  xo = -curPosL * physicalZoomLevel() + marginLeft;
                   }
             else {
                   // focus is within margins, so do nothing
                   return;
                   }
             // avoid empty space on either side of "page"
-            qreal scoreEnd = score()->pages().front()->width() * mag() + xo;
+            qreal scoreEnd = score()->pages().front()->width() * physicalZoomLevel() + xo;
             if (xo > 10)
                   xo = 10;
             else if (scoreEnd < width())
@@ -3596,21 +3730,21 @@ void ScoreView::adjustCanvasPosition(const Element* el, bool playBack, int staff
       if (r.contains(showRect))
             return;
 
-      qreal x   = - xoffset() / mag();
-      qreal y   = - yoffset() / mag();
+      qreal x  = - xoffset() / physicalZoomLevel();
+      qreal y  = - yoffset() / physicalZoomLevel();
 
       qreal oldX = x, oldY = y;
 
       if (showRect.left() < r.left())
             x = showRect.left() - border;
       else if (showRect.left() > r.right())
-            x = showRect.right() - width() / mag() + border;
+            x = showRect.right() - width() / physicalZoomLevel() + border;
       else if (r.width() >= showRect.width() && showRect.right() > r.right())
             x = showRect.left() - border;
       if (showRect.top() < r.top() && showRect.bottom() < r.bottom())
             y = showRect.top() - border;
       else if (showRect.top() > r.bottom())
-            y = showRect.bottom() - height() / mag() + border;
+            y = showRect.bottom() - height() / physicalZoomLevel() + border;
       else if (r.height() >= showRect.height() && showRect.bottom() > r.bottom())
             y = showRect.top() - border;
 
@@ -3629,7 +3763,7 @@ void ScoreView::adjustCanvasPosition(const Element* el, bool playBack, int staff
       if (oldX == x && oldY == y)
             return;
 
-      setOffset(-x * mag(), -y * mag());
+      setOffset(-x * physicalZoomLevel(), -y * physicalZoomLevel());
       update();
       }
 
@@ -4670,8 +4804,10 @@ void ScoreView::cmdRepeatSelection()
             return;
             }
       if (!selection.isRange()) {
-            qDebug("wrong selection type");
-            return;
+            ChordRest* cr = _score->getSelectedChordRest();
+            if (!cr)
+                  return;
+            _score->select(cr, SelectType::RANGE);
             }
 
       if (!checkCopyOrCut())
@@ -5258,8 +5394,9 @@ static bool needViewportMove(Score* cs, ScoreView* cv)
       mEnd = mEnd ? mEnd->nextMeasureMM() : nullptr;
 
       const bool isExcerpt = !cs->isMaster();
-      const int startStaff = (isExcerpt || state.startStaff() < 0) ? 0 : state.startStaff();
-      const int endStaff = (isExcerpt || state.endStaff() < 0) ? (cs->nstaves() - 1) : state.endStaff();
+      const bool csStaves = (isExcerpt || (state.endStaff() < 0) || (state.endStaff() >= cs->nstaves()));
+      const int startStaff = csStaves ? 0 : state.startStaff();
+      const int endStaff = csStaves ? (cs->nstaves() - 1) : state.endStaff();
 
       for (Measure* m = mStart; m && m != mEnd; m = m->nextMeasureMM()) {
             for (int st = startStaff; st <= endStaff; ++st) {
@@ -5355,5 +5492,7 @@ void SmoothPanSettings::loadFromPreferences()
 //      advancedWeighting = preferences.getBool(PREF_PAN_WEIGHT_ADVANCED);
 //      cursorTimerDuration = preferences.getInt(PREF_PAN_SMART_TIMER_DURATION);
       controlCursorScreenPos = preferences.getDouble(PREF_PAN_CURSOR_POS);
+      teleportLeftEnabled = preferences.getBool(PREF_PAN_TELEPORT_LEFT);
+      teleportRightEnabled = preferences.getBool(PREF_PAN_TELEPORT_RIGHT);
       }
 } // namespace Ms

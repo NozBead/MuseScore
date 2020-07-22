@@ -482,6 +482,11 @@ void UndoStack::redo(EditData* ed)
 //   UndoMacro
 //---------------------------------------------------------
 
+bool UndoMacro::canRecordSelectedElement(const Element* e)
+      {
+      return e->isNote() || (e->isChordRest() && !e->isChord()) || (e->isTextBase() && !e->isInstrumentName()) || e->isFretDiagram();
+      }
+
 void UndoMacro::fillSelectionInfo(SelectionInfo& info, const Selection& sel)
       {
       info.staffStart = info.staffEnd = -1;
@@ -489,7 +494,7 @@ void UndoMacro::fillSelectionInfo(SelectionInfo& info, const Selection& sel)
 
       if (sel.isList()) {
             for (Element* e : sel.elements()) {
-                  if (e->isNote() || e->isChordRest() || (e->isTextBase() && !e->isInstrumentName()) || e->isFretDiagram())
+                  if (canRecordSelectedElement(e))
                         info.elements.push_back(e);
                   else {
                         // don't remember selection we are unable to restore
@@ -1516,7 +1521,8 @@ void SetUserBankController::flip(EditData*)
 //---------------------------------------------------------
 
 ChangeStaff::ChangeStaff(Staff* _staff,  bool _invisible, ClefTypeList _clefType,
-   qreal _userDist, Staff::HideMode _hideMode, bool _showIfEmpty, bool _cutaway, bool hide)
+   qreal _userDist, Staff::HideMode _hideMode, bool _showIfEmpty, bool _cutaway, 
+   bool _hideSystemBarLine, bool  _mergeMatchingRests)
       {
       staff       = _staff;
       invisible   = _invisible;
@@ -1525,7 +1531,8 @@ ChangeStaff::ChangeStaff(Staff* _staff,  bool _invisible, ClefTypeList _clefType
       hideMode    = _hideMode;
       showIfEmpty = _showIfEmpty;
       cutaway     = _cutaway;
-      hideSystemBarLine = hide;
+      hideSystemBarLine  = _hideSystemBarLine;
+      mergeMatchingRests = _mergeMatchingRests;
       }
 
 //---------------------------------------------------------
@@ -1541,7 +1548,8 @@ void ChangeStaff::flip(EditData*)
       Staff::HideMode oldHideMode    = staff->hideWhenEmpty();
       bool oldShowIfEmpty = staff->showIfEmpty();
       bool oldCutaway     = staff->cutaway();
-      bool hide           = staff->hideSystemBarLine();
+      bool oldHideSystemBarLine  = staff->hideSystemBarLine();
+      bool oldMergeMatchingRests = staff->mergeMatchingRests();
 
       staff->setInvisible(invisible);
       staff->setDefaultClefType(clefType);
@@ -1550,6 +1558,7 @@ void ChangeStaff::flip(EditData*)
       staff->setShowIfEmpty(showIfEmpty);
       staff->setCutaway(cutaway);
       staff->setHideSystemBarLine(hideSystemBarLine);
+      staff->setMergeMatchingRests(mergeMatchingRests);
 
       invisible   = oldInvisible;
       clefType    = oldClefType;
@@ -1557,7 +1566,8 @@ void ChangeStaff::flip(EditData*)
       hideMode    = oldHideMode;
       showIfEmpty = oldShowIfEmpty;
       cutaway     = oldCutaway;
-      hideSystemBarLine = hide;
+      hideSystemBarLine  = oldHideSystemBarLine;
+      mergeMatchingRests = oldMergeMatchingRests;
 
       Score* score = staff->score();
       if (invisibleChanged) {
